@@ -161,6 +161,7 @@ export default function SettingsPage() {
   const { toast } = useToast();
   const { user: authUser, hasPermission } = useAuth();
   const canBackupTab = hasPermission("settings.backup");
+  const canAuditTab = hasPermission("settings.audit");
   const canManageDepartments = hasPermission("settings.departments");
   const [activeTab, setActiveTab] = useState("usuarios");
   const [usuarios, setUsuarios] = useState<components["schemas"]["UserAdmin"][]>([]);
@@ -848,7 +849,7 @@ export default function SettingsPage() {
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold">Configuración</h1>
-        <p className="text-muted-foreground text-sm mt-1">Administración del sistema — Solo Superadmin RRHH</p>
+        <p className="text-muted-foreground text-sm mt-1">Administración del sistema</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -857,7 +858,9 @@ export default function SettingsPage() {
           <TabsTrigger value="areas" className="gap-1.5"><Building2 className="w-4 h-4" />Áreas</TabsTrigger>
           <TabsTrigger value="smtp" className="gap-1.5"><Mail className="w-4 h-4" />SMTP</TabsTrigger>
           <TabsTrigger value="parametros" className="gap-1.5"><Shield className="w-4 h-4" />Parámetros</TabsTrigger>
-          <TabsTrigger value="auditoria" className="gap-1.5"><FileText className="w-4 h-4" />Auditoría</TabsTrigger>
+          {canAuditTab ? (
+            <TabsTrigger value="auditoria" className="gap-1.5"><FileText className="w-4 h-4" />Auditoría</TabsTrigger>
+          ) : null}
           {canBackupTab ? (
             <TabsTrigger value="backup" className="gap-1.5"><Database className="w-4 h-4" />Backup</TabsTrigger>
           ) : null}
@@ -1515,7 +1518,7 @@ export default function SettingsPage() {
                 }}
                 readOnly={!!editingUser}
                 tabIndex={editingUser ? -1 : undefined}
-                placeholder="usuario@enviam.as"
+                placeholder="usuario@enviamas.pe"
                 className={editingUser ? "bg-muted cursor-not-allowed" : undefined}
                 disabled={userFormSubmitting}
               />
@@ -1785,7 +1788,7 @@ export default function SettingsPage() {
               <Label className="text-sm">Puestos del área</Label>
               <p className="text-xs text-muted-foreground">
                 Opcional. Cargos habituales de esta área; puedes añadir varios (máx. 50). No podrás quitar un puesto si
-                algún empleado del área tiene ese cargo en su ficha (campo Puesto).
+                algún colaborador del área tiene ese cargo en su ficha (campo Puesto).
               </p>
               <div className="space-y-2">
                 {deptPositionsDraft.map(row => (
@@ -1863,7 +1866,7 @@ export default function SettingsPage() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">
             {deptPendingDelete
-              ? `¿Eliminar el área «${deptPendingDelete.name}»? Esta acción no se puede deshacer. Si hay empleados o usuarios vinculados, el sistema no permitirá el borrado.`
+              ? `¿Eliminar el área «${deptPendingDelete.name}»? Esta acción no se puede deshacer. Si hay colaboradores o usuarios vinculados, el sistema no permitirá el borrado.`
               : null}
           </p>
           <DialogFooter>

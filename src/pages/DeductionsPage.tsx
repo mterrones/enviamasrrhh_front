@@ -32,7 +32,7 @@ import {
   type DeductionInstallmentPlan,
   type DeductionInstallmentPlanWriteBody,
 } from "@/api/payroll";
-import { formatEmployeeName } from "@/lib/employeeName";
+import { formatEmployeeFullName } from "@/lib/employeeName";
 import { deductionPlanCategoryLabelEs } from "@/lib/payrollDeductionHelpers";
 import { normalizeMoneyDecimalInput } from "@/lib/moneyDecimalInput";
 import { useAuth } from "@/contexts/AuthContext";
@@ -194,7 +194,7 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
 
   const openCreate = () => {
     if (Number.isNaN(selectedEmpId)) {
-      toast({ title: "Empleado requerido", description: "Selecciona un empleado.", variant: "destructive" });
+      toast({ title: "Colaborador requerido", description: "Selecciona un colaborador.", variant: "destructive" });
       return;
     }
     setCreateLabel("");
@@ -354,36 +354,36 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
         <div>
           <h1 className="text-2xl font-bold">Descuentos</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Planes de descuento en cuotas por empleado. Las cuotas se aplican al aprobar boletas con código{" "}
+            Planes de descuento en cuotas por colaborador. Las cuotas se aplican al aprobar boletas con código{" "}
             <span className="font-mono text-xs">installment:ID</span>.
           </p>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Planes de descuento en cuotas por empleado. Las cuotas se aplican al aprobar boletas con código{" "}
+          Planes de descuento en cuotas por colaborador. Las cuotas se aplican al aprobar boletas con código{" "}
           <span className="font-mono text-xs">installment:ID</span>.
         </p>
       )}
 
       <Card className="shadow-card">
         <CardHeader>
-          <CardTitle className="text-base">Seleccionar empleado</CardTitle>
+          <CardTitle className="text-base">Seleccionar colaborador</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col sm:flex-row gap-3 sm:items-end">
           <div className="flex-1 space-y-2">
-            <Label>Empleado</Label>
+            <Label>Colaborador</Label>
             <Select
               value={employeeId}
               onValueChange={setEmployeeId}
               disabled={employeesLoading}
             >
               <SelectTrigger>
-                <SelectValue placeholder={employeesLoading ? "Cargando…" : "Elegir empleado"} />
+                <SelectValue placeholder={employeesLoading ? "Cargando…" : "Elegir colaborador"} />
               </SelectTrigger>
               <SelectContent>
                 {employees.map((emp) => (
                   <SelectItem key={emp.id} value={String(emp.id)}>
-                    {formatEmployeeName(emp)}
+                    {formatEmployeeFullName(emp)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -412,7 +412,7 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
                 <Loader2 className="w-4 h-4 animate-spin" /> Cargando…
               </p>
             ) : plans.length === 0 ? (
-              <p className="p-6 text-sm text-muted-foreground">No hay planes para este empleado.</p>
+              <p className="p-6 text-sm text-muted-foreground">No hay planes para este colaborador.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -536,7 +536,7 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
         </Card>
         </>
       ) : (
-        <p className="text-sm text-muted-foreground">Elige un empleado para ver y gestionar sus descuentos.</p>
+        <p className="text-sm text-muted-foreground">Elige un colaborador para ver y gestionar sus descuentos.</p>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

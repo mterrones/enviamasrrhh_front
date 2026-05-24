@@ -23,6 +23,7 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ListPaginationBar } from "@/components/ListPaginationBar";
+import { PendingPdfFileInput } from "@/components/PendingPdfFileInput";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { ApiHttpError } from "@/api/client";
@@ -67,7 +68,8 @@ import {
   type VacationBalanceData,
 } from "@/api/portal";
 import { updateEmployee } from "@/api/employees";
-import { uploadEmployeeDocument, type EmployeeDocumentType } from "@/api/employeeDocuments";
+import { deleteEmployeeDocument, uploadEmployeeDocument, type EmployeeDocumentType } from "@/api/employeeDocuments";
+import { EmployeeDocumentActionBar } from "@/components/EmployeeDocumentActionBar";
 import { DEFAULT_LIST_PAGE_SIZE } from "@/constants/pagination";
 import {
   FileText,
@@ -85,7 +87,10 @@ import {
 import { addDays, format, differenceInCalendarDays, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
 import { formatDecimalHoursAsDuration } from "@/lib/formatWorkedDuration";
+import { formatEmployeeModalityDisplay } from "@/lib/employeeModalityCatalog";
 import { formatAppDate, formatAppDateTime, formatAppMonthYear } from "@/lib/formatAppDate";
+import { displayEmployeeDni, editableEmployeeDni } from "@/lib/employeeDniDisplay";
+import { confirmReplaceEmployeeDocument } from "@/lib/employeeDocumentUi";
 
 function formatPen(amount: string): string {
   const n = Number(amount);
@@ -116,8 +121,9 @@ function portalManagerLabel(name: string | null | undefined): string {
 }
 
 const portalPersonalPdfSlots = [
-  { type: "antecedentes" as const, label: "Antecedentes policiales (PDF)" },
+  { type: "dni_scan" as const, label: "Escaneo de DNI (PDF)" },
   { type: "cv" as const, label: "CV (PDF)" },
+  { type: "antecedentes" as const, label: "Antecedentes policiales (PDF)" },
   { type: "medical_exam" as const, label: "Examen Médico Ocupacional (PDF)" },
 ];
 
@@ -229,10 +235,10 @@ const portalBankCatalog = ["BCP", "BBVA", "Interbank", "Scotiabank", "BanBif", "
 const portalPensionCatalog = ["AFP Integra", "AFP Prima", "AFP Profuturo", "AFP Habitat", "ONP"];
 const portalEducationCatalog = ["Secundaria", "Técnico", "Universitario", "Postgrado"];
 
-type PortalSelfPdfKey = Extract<EmployeeDocumentType, "antecedentes" | "cv" | "medical_exam">;
+type PortalSelfPdfKey = Extract<EmployeeDocumentType, "dni_scan" | "antecedentes" | "cv" | "medical_exam">;
 
 function emptyPortalSelfPdfFiles(): Record<PortalSelfPdfKey, File | null> {
-  return { antecedentes: null, cv: null, medical_exam: null };
+  return { dni_scan: null, cv: null, antecedentes: null, medical_exam: null };
 }
 
 const PORTAL_TAB_VALUES = new Set(["boletas", "asistencia", "solicitudes", "equipos", "datos", "notificaciones"]);
@@ -322,11 +328,12 @@ export default function EmployeePortalPage() {
       (hasPermission("employees.self_edit") ||
         (user?.impersonation?.active === true && hasPermission("employees.edit"))),
   );
+  const canEditPortalDatos = hasEmployee;
   const isAdminRrhhRole = user?.rol === "superadmin_rrhh" || user?.rol === "admin_rrhh";
   const emptyStateNoEmployeeMessage =
     isAdminRrhhRole && !hasEmployee
-      ? "Sin datos: este portal muestra información de la ficha de empleado vinculada a tu usuario. Las cuentas administrativas no suelen tener ficha propia aquí."
-      : "Sin datos hasta vincular tu ficha de empleado.";
+      ? "Sin datos: este portal muestra información de la ficha de colaborador vinculada a tu usuario. Las cuentas administrativas no suelen tener ficha propia aquí."
+      : "Sin datos hasta vincular tu ficha de colaborador.";
   const welcomeName = user?.nombre ?? "…";
   const hidePortalTabBar = user?.rol === "empleado";
   const isImpersonating = user?.impersonation?.active === true;
@@ -439,6 +446,7 @@ export default function EmployeePortalPage() {
   const [contactEmergencyPhone, setContactEmergencyPhone] = useState("");
   const [bank, setBank] = useState("");
   const [bankAccount, setBankAccount] = useState("");
+  const [bankAccountCci, setBankAccountCci] = useState("");
   const [pensionFund, setPensionFund] = useState("");
   const [contactLoading, setContactLoading] = useState(false);
   const [contactSaving, setContactSaving] = useState(false);
@@ -448,12 +456,19 @@ export default function EmployeePortalPage() {
   const [hasEmployeePhotoFile, setHasEmployeePhotoFile] = useState(false);
   const [profilePhotoObjectUrl, setProfilePhotoObjectUrl] = useState<string | null>(null);
   const [portalDocuments, setPortalDocuments] = useState<PortalEmployeeDocumentRow[]>([]);
-  const [portalEmployeeDocDownloadingId, setPortalEmployeeDocDownloadingId] = useState<number | null>(null);
+  const [portalEmployeeDocActionId, setPortalEmployeeDocActionId] = useState<number | null>(null);
   const [portalSelfDni, setPortalSelfDni] = useState("");
+  const [portalSelfMiddleName, setPortalSelfMiddleName] = useState("");
+  const [portalSelfSecondLastName, setPortalSelfSecondLastName] = useState("");
   const [portalSelfBirthDate, setPortalSelfBirthDate] = useState("");
   const [portalSelfEducation, setPortalSelfEducation] = useState("");
   const [portalSelfDegree, setPortalSelfDegree] = useState("");
   const [portalSelfPdfFiles, setPortalSelfPdfFiles] = useState<Record<PortalSelfPdfKey, File | null>>(emptyPortalSelfPdfFiles);
+  const [isDatosEditing, setIsDatosEditing] = useState(false);
+  const lastPortalContactRef = useRef<PortalContact | null>(null);
+
+  const isPersonalFieldEditable = isDatosEditing && canSelfEditPersonalInPortal;
+  const isDatosFieldEditable = isDatosEditing && canEditPortalDatos;
 
   const [notificationPage, setNotificationPage] = useState(1);
   const [notifications, setNotifications] = useState<PortalEmployeeNotification[]>([]);
@@ -485,6 +500,15 @@ export default function EmployeePortalPage() {
 
   const portalDocByType = useMemo(() => portalLatestDocByType(portalDocuments), [portalDocuments]);
   const portalContractDoc = portalDocByType.get("contract");
+
+  const handlePortalSelfPdfFileSelect = (pdfKey: PortalSelfPdfKey, label: string) => (file: File | null) => {
+    if (file && portalDocByType.has(pdfKey)) {
+      if (!confirmReplaceEmployeeDocument(label)) {
+        return;
+      }
+    }
+    setPortalSelfPdfFiles((prev) => ({ ...prev, [pdfKey]: file }));
+  };
 
   const attendancePeriod = useMemo(() => {
     const from = format(new Date(portalAttYear, portalAttMonthIndex, 1), "yyyy-MM-dd");
@@ -778,6 +802,7 @@ export default function EmployeePortalPage() {
   };
 
   const applyPortalContactResponse = useCallback((d: PortalContact) => {
+    lastPortalContactRef.current = d;
     setCorporateEmail(d.corporate_email ?? "");
     setContactPhone(d.phone ?? "");
     setContactPersonalEmail(d.personal_email ?? "");
@@ -785,6 +810,7 @@ export default function EmployeePortalPage() {
     setContactEmergencyPhone(d.emergency_contact_phone ?? "");
     setBank(d.bank ?? "");
     setBankAccount(d.bank_account ?? "");
+    setBankAccountCci(d.bank_account_cci ?? "");
     setPensionFund(d.pension_fund ?? "");
     setPortalPersonal(d.personal);
     setPortalWork(d.work);
@@ -800,6 +826,7 @@ export default function EmployeePortalPage() {
       setContactEmergencyPhone("");
       setBank("");
       setBankAccount("");
+      setBankAccountCci("");
       setPensionFund("");
       setPortalPersonal(null);
       setPortalWork(null);
@@ -828,17 +855,41 @@ export default function EmployeePortalPage() {
 
   useEffect(() => {
     if (!canSelfEditPersonalInPortal || !portalPersonal) return;
-    setPortalSelfDni((portalPersonal.dni ?? "").trim());
+    setPortalSelfDni(editableEmployeeDni(portalPersonal.dni));
+    setPortalSelfMiddleName(portalPersonal.middle_name ?? "");
+    setPortalSelfSecondLastName(portalPersonal.second_last_name ?? "");
     setPortalSelfBirthDate(portalPersonal.birth_date ? portalPersonal.birth_date.slice(0, 10) : "");
     setPortalSelfEducation(portalPersonal.education_level ?? "");
     setPortalSelfDegree(portalPersonal.degree ?? "");
   }, [canSelfEditPersonalInPortal, portalPersonal]);
 
+  const handleViewPortalEmployeeDocument = useCallback(
+    async (doc: PortalEmployeeDocumentRow) => {
+      setPortalEmployeeDocActionId(doc.id);
+      try {
+        const blob = await downloadPortalEmployeeDocumentBlob(doc.id, { attachment: false });
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank", "noopener");
+        window.setTimeout(() => URL.revokeObjectURL(url), 3_600_000);
+      } catch (e) {
+        const msg = e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudo abrir";
+        toast({
+          title: "Error",
+          description: typeof msg === "string" ? msg : "Intenta de nuevo",
+          variant: "destructive",
+        });
+      } finally {
+        setPortalEmployeeDocActionId(null);
+      }
+    },
+    [toast],
+  );
+
   const handleDownloadPortalEmployeeDocument = useCallback(
     async (doc: PortalEmployeeDocumentRow) => {
-      setPortalEmployeeDocDownloadingId(doc.id);
+      setPortalEmployeeDocActionId(doc.id);
       try {
-        const blob = await downloadPortalEmployeeDocumentBlob(doc.id);
+        const blob = await downloadPortalEmployeeDocumentBlob(doc.id, { attachment: true });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -855,15 +906,69 @@ export default function EmployeePortalPage() {
           variant: "destructive",
         });
       } finally {
-        setPortalEmployeeDocDownloadingId(null);
+        setPortalEmployeeDocActionId(null);
       }
     },
     [toast],
   );
 
+  const handleDeletePortalEmployeeDocument = useCallback(
+    async (doc: PortalEmployeeDocumentRow, label: string) => {
+      if (selfEmployeeId == null) return;
+      if (!window.confirm(`¿Eliminar el documento "${label}"? Esta acción no se puede deshacer.`)) return;
+      setPortalEmployeeDocActionId(doc.id);
+      try {
+        await deleteEmployeeDocument(selfEmployeeId, doc.id);
+        toast({ title: "Documento eliminado", description: `${label} se eliminó correctamente.` });
+        const docRes = await fetchPortalDocuments();
+        setPortalDocuments(docRes.data);
+      } catch (e) {
+        const msg = e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudo eliminar";
+        toast({
+          title: "Error",
+          description: typeof msg === "string" ? msg : "Intenta de nuevo",
+          variant: "destructive",
+        });
+      } finally {
+        setPortalEmployeeDocActionId(null);
+      }
+    },
+    [selfEmployeeId, toast],
+  );
+
   useEffect(() => {
     if (activeTab === "datos") void loadContact();
   }, [activeTab, loadContact]);
+
+  useEffect(() => {
+    if (activeTab !== "datos") {
+      setIsDatosEditing(false);
+    }
+  }, [activeTab]);
+
+  const resetPortalPersonalFieldsFromSnapshot = useCallback((personal: PortalPersonalSnapshot | null) => {
+    if (!personal) return;
+    setPortalSelfDni(editableEmployeeDni(personal.dni));
+    setPortalSelfMiddleName(personal.middle_name ?? "");
+    setPortalSelfSecondLastName(personal.second_last_name ?? "");
+    setPortalSelfBirthDate(personal.birth_date ? personal.birth_date.slice(0, 10) : "");
+    setPortalSelfEducation(personal.education_level ?? "");
+    setPortalSelfDegree(personal.degree ?? "");
+  }, []);
+
+  const enterDatosEditMode = useCallback(() => {
+    setIsDatosEditing(true);
+  }, []);
+
+  const handleCancelDatosEdit = useCallback(() => {
+    const snap = lastPortalContactRef.current;
+    if (snap) {
+      applyPortalContactResponse(snap);
+      resetPortalPersonalFieldsFromSnapshot(snap.personal);
+    }
+    setPortalSelfPdfFiles(emptyPortalSelfPdfFiles());
+    setIsDatosEditing(false);
+  }, [applyPortalContactResponse, resetPortalPersonalFieldsFromSnapshot]);
 
   useEffect(() => {
     if (activeTab !== "datos" || !hasEmployee || contactLoading || !hasEmployeePhotoFile) {
@@ -1124,28 +1229,44 @@ export default function EmployeePortalPage() {
       });
       return;
     }
-    if (canSelfEditPersonalInPortal && selfEmployeeId != null) {
-      const dniTrim = portalSelfDni.trim();
-      if (!dniTrim) {
-        toast({
-          title: "DNI requerido",
-          description: "Indica tu documento de identidad.",
-          variant: "destructive",
-        });
-        return;
-      }
-    }
+    const dniTrim = portalSelfDni.trim();
+    const hasPdfUploads = (["dni_scan", "cv", "antecedentes", "medical_exam"] as PortalSelfPdfKey[]).some(
+      (key) => portalSelfPdfFiles[key] != null,
+    );
+    const hasPersonalFieldChanges =
+      dniTrim !== editableEmployeeDni(portalPersonal?.dni) ||
+      portalSelfMiddleName.trim() !== (portalPersonal?.middle_name ?? "").trim() ||
+      portalSelfSecondLastName.trim() !== (portalPersonal?.second_last_name ?? "").trim() ||
+      portalSelfBirthDate !== (portalPersonal?.birth_date ? portalPersonal.birth_date.slice(0, 10) : "") ||
+      portalSelfEducation !== (portalPersonal?.education_level ?? "") ||
+      portalSelfDegree !== (portalPersonal?.degree ?? "");
+    const shouldUpdatePersonal = hasPdfUploads || hasPersonalFieldChanges;
+
     setContactSaving(true);
     try {
       let pdfUploadError = false;
       if (canSelfEditPersonalInPortal && selfEmployeeId != null) {
-        await updateEmployee(selfEmployeeId, {
-          dni: portalSelfDni.trim(),
-          birth_date: portalSelfBirthDate.trim() || null,
-          education_level: portalSelfEducation.trim() || null,
-          degree: portalSelfDegree.trim() || null,
-        });
-        const pdfOrder: PortalSelfPdfKey[] = ["antecedentes", "cv", "medical_exam"];
+        if (shouldUpdatePersonal) {
+          const personalPayload: {
+            middle_name: string | null;
+            second_last_name: string | null;
+            birth_date: string | null;
+            education_level: string | null;
+            degree: string | null;
+            dni?: string | null;
+          } = {
+            middle_name: portalSelfMiddleName.trim() || null,
+            second_last_name: portalSelfSecondLastName.trim() || null,
+            birth_date: portalSelfBirthDate.trim() || null,
+            education_level: portalSelfEducation.trim() || null,
+            degree: portalSelfDegree.trim() || null,
+          };
+          if (dniTrim !== editableEmployeeDni(portalPersonal?.dni)) {
+            personalPayload.dni = dniTrim || null;
+          }
+          await updateEmployee(selfEmployeeId, personalPayload);
+        }
+        const pdfOrder: PortalSelfPdfKey[] = ["dni_scan", "cv", "antecedentes", "medical_exam"];
         for (const key of pdfOrder) {
           const file = portalSelfPdfFiles[key];
           if (!file) continue;
@@ -1164,6 +1285,7 @@ export default function EmployeePortalPage() {
         emergency_contact_phone: contactEmergencyPhone.trim() || null,
         bank: bank.trim() || null,
         bank_account: bankAccount.trim() || null,
+        bank_account_cci: bankAccountCci.trim() || null,
         pension_fund: pensionFund.trim() || null,
       });
       applyPortalContactResponse(r.data);
@@ -1182,6 +1304,7 @@ export default function EmployeePortalPage() {
       } else {
         toast({ title: "Datos actualizados", description: "Tu información se guardó correctamente." });
       }
+      setIsDatosEditing(false);
     } catch (e) {
       const msg = requestErrorMessage(e);
       toast({ title: "No se pudo guardar", description: msg, variant: "destructive" });
@@ -1310,7 +1433,7 @@ export default function EmployeePortalPage() {
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-bold">Portal del Empleado</h1>
+        <h1 className="text-2xl font-bold">Portal del Colaborador</h1>
         <p className="text-muted-foreground text-sm mt-1">Bienvenido, {welcomeName}</p>
       </div>
 
@@ -1336,14 +1459,14 @@ export default function EmployeePortalPage() {
       {!hasEmployee ? (
         isAdminRrhhRole ? (
           <p className="text-sm text-muted-foreground border border-border bg-muted/40 rounded-md px-4 py-3">
-            Este apartado es el <span className="font-medium text-foreground">portal del empleado</span>: solo muestra boletas,
+            Este apartado es el <span className="font-medium text-foreground">portal del colaborador</span>: solo muestra boletas,
             asistencia y demás datos cuando tu usuario tiene una{" "}
-            <span className="font-medium text-foreground">ficha de empleado vinculada</span>. Las cuentas de administración RRHH
-            no suelen usar esta vista; si además trabajas como empleado, RRHH puede vincular tu usuario a tu ficha en el sistema.
+            <span className="font-medium text-foreground">ficha de colaborador vinculada</span>. Las cuentas de administración RRHH
+            no suelen usar esta vista; si además trabajas como colaborador, RRHH puede vincular tu usuario a tu ficha en el sistema.
           </p>
         ) : (
           <p className="text-sm text-destructive border border-destructive/30 bg-destructive/5 rounded-md px-4 py-3">
-            Tu cuenta no está vinculada a una ficha de empleado. Solicita a RRHH que asocien tu usuario para ver boletas,
+            Tu cuenta no está vinculada a una ficha de colaborador. Solicita a RRHH que asocien tu usuario para ver boletas,
             asistencia, solicitudes, equipos en préstamo y datos personales.
           </p>
         )
@@ -1397,8 +1520,20 @@ export default function EmployeePortalPage() {
             <>
               {portalPersonal && portalWork ? (
                 <Card className="shadow-card">
-                  <CardHeader>
+                  <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-4">
                     <CardTitle className="text-lg">Datos Personales</CardTitle>
+                    {canEditPortalDatos ? (
+                      !isDatosEditing ? (
+                        <Button variant="outline" size="sm" type="button" className="shrink-0" onClick={enterDatosEditMode}>
+                          <Pencil className="w-3.5 h-3.5 mr-1" />
+                          Editar
+                        </Button>
+                      ) : (
+                        <Button variant="ghost" size="sm" type="button" className="shrink-0" onClick={handleCancelDatosEdit}>
+                          Cancelar
+                        </Button>
+                      )
+                    ) : null}
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="flex items-center gap-4 mb-2">
@@ -1418,18 +1553,47 @@ export default function EmployeePortalPage() {
                         La foto proviene de la cuenta corporativa vinculada y no se puede cambiar aquí.
                       </p>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                       <div className="space-y-2">
                         <Label>Nombre</Label>
                         <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.first_name)} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Segundo Nombre</Label>
+                        {isPersonalFieldEditable ? (
+                          <>
+                            <Input
+                              value={portalSelfMiddleName}
+                              onChange={(e) => setPortalSelfMiddleName(e.target.value)}
+                              placeholder="Ej: Carlos"
+                            />
+                            <p className="text-xs text-muted-foreground">Ingrese todos los demás nombres si aplica</p>
+                          </>
+                        ) : (
+                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.middle_name)} />
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label>Apellido</Label>
                         <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.last_name)} />
                       </div>
                       <div className="space-y-2">
+                        <Label>Segundo Apellido</Label>
+                        {isPersonalFieldEditable ? (
+                          <Input
+                            value={portalSelfSecondLastName}
+                            onChange={(e) => setPortalSelfSecondLastName(e.target.value)}
+                            placeholder="Ej: García"
+                          />
+                        ) : (
+                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.second_last_name)} />
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div className="space-y-2">
                         <Label>DNI</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Input
                             maxLength={16}
                             value={portalSelfDni}
@@ -1438,12 +1602,12 @@ export default function EmployeePortalPage() {
                             autoComplete="off"
                           />
                         ) : (
-                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.dni)} />
+                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={displayEmployeeDni(portalPersonal.dni)} />
                         )}
                       </div>
                       <div className="space-y-2">
                         <Label>Fecha de nacimiento</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Input type="date" value={portalSelfBirthDate} onChange={(e) => setPortalSelfBirthDate(e.target.value)} />
                         ) : (
                           <Input
@@ -1456,7 +1620,7 @@ export default function EmployeePortalPage() {
                       </div>
                       <div className="space-y-2">
                         <Label>Nivel de estudios</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Select value={portalSelfEducation || undefined} onValueChange={(v) => setPortalSelfEducation(v)}>
                             <SelectTrigger>
                               <SelectValue placeholder="Seleccionar" />
@@ -1476,7 +1640,7 @@ export default function EmployeePortalPage() {
                       </div>
                       <div className="space-y-2">
                         <Label>Carrera / Especialidad</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Input
                             value={portalSelfDegree}
                             onChange={(e) => setPortalSelfDegree(e.target.value)}
@@ -1487,54 +1651,38 @@ export default function EmployeePortalPage() {
                         )}
                       </div>
                     </div>
-                    {canSelfEditPersonalInPortal ? (
+                    {isPersonalFieldEditable ? (
                       <p className="text-xs text-muted-foreground">
                         Los cambios de esta sección se guardan con el botón <span className="font-medium text-foreground">Guardar cambios</span>{" "}
                         al final de la página.
                       </p>
                     ) : null}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                       {portalPersonalPdfSlots.map((slot) => {
                         const doc = portalDocByType.get(slot.type);
                         const pdfKey = slot.type as PortalSelfPdfKey;
-                        const pendingFile = canSelfEditPersonalInPortal ? portalSelfPdfFiles[pdfKey] : null;
+                        const pendingFile = isPersonalFieldEditable ? portalSelfPdfFiles[pdfKey] : null;
                         return (
                           <div key={slot.type} className="space-y-2">
                             <Label>{slot.label}</Label>
                             {doc ? (
-                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                                <p className="text-xs text-muted-foreground truncate min-w-0 flex-1">{doc.filename}</p>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="shrink-0 w-fit gap-1.5"
-                                  disabled={portalEmployeeDocDownloadingId === doc.id}
-                                  onClick={() => void handleDownloadPortalEmployeeDocument(doc)}
-                                >
-                                  <Download className="w-3.5 h-3.5" />
-                                  {portalEmployeeDocDownloadingId === doc.id ? "Descargando…" : "Descargar"}
-                                </Button>
-                              </div>
+                              <EmployeeDocumentActionBar
+                                filename={doc.filename}
+                                busy={portalEmployeeDocActionId === doc.id}
+                                canDelete={isPersonalFieldEditable}
+                                onView={() => void handleViewPortalEmployeeDocument(doc)}
+                                onDownload={() => void handleDownloadPortalEmployeeDocument(doc)}
+                                onDelete={() => void handleDeletePortalEmployeeDocument(doc, slot.label)}
+                              />
                             ) : (
                               <p className="text-sm text-muted-foreground">Sin archivo registrado.</p>
                             )}
-                            {canSelfEditPersonalInPortal ? (
-                              <div className="space-y-1">
-                                <Input
-                                  type="file"
-                                  accept=".pdf,application/pdf"
-                                  className="cursor-pointer text-xs h-auto py-2"
-                                  onChange={(e) => {
-                                    const f = e.target.files?.[0] ?? null;
-                                    e.target.value = "";
-                                    setPortalSelfPdfFiles((prev) => ({ ...prev, [pdfKey]: f }));
-                                  }}
-                                />
-                                {pendingFile ? (
-                                  <p className="text-xs text-muted-foreground truncate">Se subirá al guardar: {pendingFile.name}</p>
-                                ) : null}
-                              </div>
+                            {isPersonalFieldEditable ? (
+                              <PendingPdfFileInput
+                                pendingFile={pendingFile}
+                                onFileSelect={handlePortalSelfPdfFileSelect(pdfKey, slot.label)}
+                                inputClassName="text-xs h-auto py-2"
+                              />
                             ) : null}
                           </div>
                         );
@@ -1567,49 +1715,89 @@ export default function EmployeePortalPage() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-phone">Teléfono</Label>
-                      <Input
-                        id="portal-phone"
-                        type="tel"
-                        autoComplete="tel"
-                        placeholder="Ej: 987654321"
-                        value={contactPhone}
-                        onChange={e => setContactPhone(e.target.value)}
-                        maxLength={50}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-phone"
+                          type="tel"
+                          autoComplete="tel"
+                          placeholder="Ej: 987654321"
+                          value={contactPhone}
+                          onChange={e => setContactPhone(e.target.value)}
+                          maxLength={50}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-phone"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactPhone)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-address">Dirección</Label>
-                      <Input
-                        id="portal-address"
-                        autoComplete="street-address"
-                        placeholder="Ej: Av. Principal 123, Lima"
-                        value={contactAddress}
-                        onChange={e => setContactAddress(e.target.value)}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-address"
+                          autoComplete="street-address"
+                          placeholder="Ej: Av. Principal 123, Lima"
+                          value={contactAddress}
+                          onChange={e => setContactAddress(e.target.value)}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-address"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactAddress)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="portal-personal-email">Correo Personal</Label>
-                      <Input
-                        id="portal-personal-email"
-                        type="email"
-                        autoComplete="email"
-                        placeholder="Ej: correo.personal@gmail.com"
-                        value={contactPersonalEmail}
-                        onChange={e => setContactPersonalEmail(e.target.value)}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-personal-email"
+                          type="email"
+                          autoComplete="email"
+                          placeholder="Ej: correo.personal@gmail.com"
+                          value={contactPersonalEmail}
+                          onChange={e => setContactPersonalEmail(e.target.value)}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-personal-email"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactPersonalEmail)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-emergency-phone">Teléfono de emergencia</Label>
-                      <Input
-                        id="portal-emergency-phone"
-                        type="tel"
-                        placeholder="Ej: 912345678"
-                        value={contactEmergencyPhone}
-                        onChange={e => setContactEmergencyPhone(e.target.value)}
-                        maxLength={50}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-emergency-phone"
+                          type="tel"
+                          placeholder="Ej: 912345678"
+                          value={contactEmergencyPhone}
+                          onChange={e => setContactEmergencyPhone(e.target.value)}
+                          maxLength={50}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-emergency-phone"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactEmergencyPhone)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -1619,48 +1807,87 @@ export default function EmployeePortalPage() {
                 <CardHeader>
                   <CardTitle className="text-lg">Datos Bancarios y Previsionales</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="space-y-2">
                       <Label>Banco</Label>
-                      <Select value={bank} onValueChange={setBank}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Seleccionar banco" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {portalCatalogExtra(bank, portalBankCatalog)}
-                          {portalBankCatalog.map(b => (
-                            <SelectItem key={b} value={b}>
-                              {b}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {isDatosFieldEditable ? (
+                        <Select value={bank} onValueChange={setBank}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleccionar banco" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {portalCatalogExtra(bank, portalBankCatalog)}
+                            {portalBankCatalog.map(b => (
+                              <SelectItem key={b} value={b}>
+                                {b}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(bank)} placeholder="—" />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-bank-account">Número de cuenta</Label>
-                      <Input
-                        id="portal-bank-account"
-                        placeholder="Ej: 19112345678901"
-                        value={bankAccount}
-                        onChange={e => setBankAccount(e.target.value)}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-bank-account"
+                          placeholder="Ej: 19112345678901"
+                          value={bankAccount}
+                          onChange={e => setBankAccount(e.target.value)}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-bank-account"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(bankAccount)}
+                          placeholder="—"
+                        />
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="portal-bank-account-cci">Número de cuenta interbancaria (CCI)</Label>
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-bank-account-cci"
+                          placeholder="Ej: 00219112345678901234"
+                          inputMode="numeric"
+                          maxLength={20}
+                          value={bankAccountCci}
+                          onChange={e => setBankAccountCci(e.target.value.replace(/\D/g, "").slice(0, 20))}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-bank-account-cci"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(bankAccountCci)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label>Sistema previsional</Label>
-                      <Select value={pensionFund} onValueChange={setPensionFund}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Seleccionar" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {portalCatalogExtra(pensionFund, portalPensionCatalog)}
-                          {portalPensionCatalog.map(p => (
-                            <SelectItem key={p} value={p}>
-                              {p}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {isDatosFieldEditable ? (
+                        <Select value={pensionFund} onValueChange={setPensionFund}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleccionar" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {portalCatalogExtra(pensionFund, portalPensionCatalog)}
+                            {portalPensionCatalog.map(p => (
+                              <SelectItem key={p} value={p}>
+                                {p}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(pensionFund)} placeholder="—" />
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -1683,7 +1910,11 @@ export default function EmployeePortalPage() {
                       </div>
                       <div className="space-y-2">
                         <Label>Modalidad</Label>
-                        <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalWork.modality)} />
+                        <Input
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(formatEmployeeModalityDisplay(portalWork.modality))}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>Tipo de contrato</Label>
@@ -1720,35 +1951,30 @@ export default function EmployeePortalPage() {
                           placeholder="—"
                         />
                       </div>
-                    </div>
-                    <div className="space-y-2 pt-2">
-                      <Label>Contrato (PDF)</Label>
-                      {portalContractDoc ? (
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 max-w-md">
-                          <p className="text-xs text-muted-foreground truncate min-w-0 flex-1">{portalContractDoc.filename}</p>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="shrink-0 w-fit gap-1.5"
-                            disabled={portalEmployeeDocDownloadingId === portalContractDoc.id}
-                            onClick={() => void handleDownloadPortalEmployeeDocument(portalContractDoc)}
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            {portalEmployeeDocDownloadingId === portalContractDoc.id ? "Descargando…" : "Descargar"}
-                          </Button>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">Sin archivo registrado.</p>
-                      )}
+                      <div className="space-y-2">
+                        <Label>Contrato (PDF)</Label>
+                        {portalContractDoc ? (
+                          <EmployeeDocumentActionBar
+                            filename={portalContractDoc.filename}
+                            busy={portalEmployeeDocActionId === portalContractDoc.id}
+                            canDelete={false}
+                            onView={() => void handleViewPortalEmployeeDocument(portalContractDoc)}
+                            onDownload={() => void handleDownloadPortalEmployeeDocument(portalContractDoc)}
+                          />
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Sin archivo registrado.</p>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
               ) : null}
 
-              <Button type="button" onClick={() => void handleSaveContact()} disabled={contactSaving}>
-                {contactSaving ? "Guardando…" : "Guardar cambios"}
-              </Button>
+              {isDatosEditing ? (
+                <Button type="button" onClick={() => void handleSaveContact()} disabled={contactSaving}>
+                  {contactSaving ? "Guardando…" : "Guardar cambios"}
+                </Button>
+              ) : null}
             </>
           )}
         </TabsContent>

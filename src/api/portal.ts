@@ -352,7 +352,9 @@ export async function deletePortalResignationRequest(id: number) {
 
 export type PortalPersonalSnapshot = {
   first_name: string | null;
+  middle_name: string | null;
   last_name: string | null;
+  second_last_name: string | null;
   dni: string | null;
   birth_date: string | null;
   education_level: string | null;
@@ -382,6 +384,7 @@ export type PortalContact = {
   emergency_contact_phone: string | null;
   bank: string | null;
   bank_account: string | null;
+  bank_account_cci: string | null;
   pension_fund: string | null;
   personal: PortalPersonalSnapshot;
   work: PortalWorkSnapshot;
@@ -418,13 +421,18 @@ export async function fetchPortalDocuments() {
   return apiRequest<{ data: PortalEmployeeDocumentRow[] }>("/portal/documents");
 }
 
-export async function downloadPortalEmployeeDocumentBlob(documentId: number): Promise<Blob> {
+export async function downloadPortalEmployeeDocumentBlob(
+  documentId: number,
+  options?: { attachment?: boolean },
+): Promise<Blob> {
+  const attachment = options?.attachment !== false;
+  const qs = attachment ? "?attachment=1" : "?attachment=0";
   const headers = new Headers();
   const token = getAuthToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  const res = await fetch(buildApiUrl(`/portal/documents/${documentId}/file?attachment=1`), { headers });
+  const res = await fetch(buildApiUrl(`/portal/documents/${documentId}/file${qs}`), { headers });
   if (!res.ok) {
     const text = await res.text();
     let parsed: unknown = text;
@@ -465,6 +473,7 @@ export async function patchPortalContact(body: {
   emergency_contact_phone?: string | null;
   bank?: string | null;
   bank_account?: string | null;
+  bank_account_cci?: string | null;
   pension_fund?: string | null;
 }) {
   return apiRequest<PortalContactEnvelope>("/portal/contact", {

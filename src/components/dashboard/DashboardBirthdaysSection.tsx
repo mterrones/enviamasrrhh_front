@@ -126,7 +126,7 @@ export function DashboardBirthdaysSection({ loading, calendar, upcoming, classNa
                     const nameEl =
                       canLinkEmployee ? (
                         <Link
-                          to={`/empleados/${row.employee_id}`}
+                          to={`/colaboradores/${row.employee_id}`}
                           className="font-medium text-primary hover:underline underline-offset-2 truncate block"
                         >
                           {label}

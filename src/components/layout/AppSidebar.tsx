@@ -30,13 +30,13 @@ type NavLinkItem = {
 
 const navItemsBeforePortal: NavLinkItem[] = [
   { label: "Inicio", icon: LayoutDashboard, path: "/", permission: "dashboard.view" },
-  { label: "Empleados", icon: Users, path: "/empleados", permission: "employees.view" },
+  { label: "Colaboradores", icon: Users, path: "/colaboradores", permission: "employees.view" },
   { label: "Asistencia", icon: CalendarCheck, path: "/asistencia", permission: "attendance.view" },
   { label: "Boletas y Nómina", icon: FileText, path: "/boletas", permission: "payroll.view" },
 ];
 
 const portalSingleItem: NavLinkItem = {
-  label: "Portal del Empleado",
+  label: "Portal del Colaborador",
   icon: UserCircle,
   path: "/portal",
   permission: "portal.view",
@@ -71,17 +71,12 @@ interface Props {
 
 export function AppSidebar({ collapsed, onToggle }: Props) {
   const location = useLocation();
-  const { hasPermission, user } = useAuth();
+  const { hasTargetPermission, user } = useAuth();
 
-  const isImpersonating = Boolean(user?.impersonation?.active);
-  const beforePortal = isImpersonating
-    ? []
-    : navItemsBeforePortal.filter((item) => hasPermission(item.permission));
-  const afterPortal = isImpersonating
-    ? []
-    : navItemsAfterPortal.filter((item) => hasPermission(item.permission));
-  const showPortal = hasPermission("portal.view");
-  const portalAsEmployeeModules = user?.rol === "empleado" || isImpersonating;
+  const beforePortal = navItemsBeforePortal.filter((item) => hasTargetPermission(item.permission));
+  const afterPortal = navItemsAfterPortal.filter((item) => hasTargetPermission(item.permission));
+  const showPortal = hasTargetPermission("portal.view");
+  const portalAsEmployeeModules = user?.rol === "empleado";
 
   return (
     <aside

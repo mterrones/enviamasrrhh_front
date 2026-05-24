@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Navigate, Route, Routes, useSearchParams } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -40,6 +40,15 @@ function DeductionsLegacyRedirect() {
   return <Navigate to={`/boletas?${next.toString()}`} replace />;
 }
 
+function EmpleadosLegacyRedirect() {
+  const location = useLocation();
+  const target =
+    location.pathname.replace(/^\/empleados(?=\/|$)/, "/colaboradores") +
+    location.search +
+    location.hash;
+  return <Navigate to={target} replace />;
+}
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
@@ -56,7 +65,7 @@ const App = () => (
             <Route element={<MainLayout />}>
               <Route path="/" element={<HomeEntry />} />
               <Route
-                path="/empleados"
+                path="/colaboradores"
                 element={
                   <RequirePermission permission="employees.view">
                     <EmployeesPage />
@@ -64,7 +73,7 @@ const App = () => (
                 }
               />
               <Route
-                path="/empleados/nuevo"
+                path="/colaboradores/nuevo"
                 element={
                   <RequirePermission permission="employees.create">
                     <NewEmployeePage />
@@ -72,16 +81,16 @@ const App = () => (
                 }
               />
               <Route
-                path="/empleados/renuncias"
+                path="/colaboradores/renuncias"
                 element={
                   <RequirePermission permission="employees.edit">
                     <ResignationRequestsPage />
                   </RequirePermission>
                 }
               />
-              <Route path="/renuncias" element={<Navigate to="/empleados/renuncias" replace />} />
+              <Route path="/renuncias" element={<Navigate to="/colaboradores/renuncias" replace />} />
               <Route
-                path="/empleados/:id/edit"
+                path="/colaboradores/:id/edit"
                 element={
                   <RequireAnyPermission permissions={["employees.edit", "employees.self_edit"]}>
                     <EditEmployeePage />
@@ -89,13 +98,14 @@ const App = () => (
                 }
               />
               <Route
-                path="/empleados/:id"
+                path="/colaboradores/:id"
                 element={
                   <RequireAnyPermission permissions={["employees.view", "employees.self_edit"]}>
                     <EmployeeProfileRoute />
                   </RequireAnyPermission>
                 }
               />
+              <Route path="/empleados/*" element={<EmpleadosLegacyRedirect />} />
               <Route
                 path="/asistencia"
                 element={

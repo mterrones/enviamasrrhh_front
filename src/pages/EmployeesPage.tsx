@@ -17,6 +17,7 @@ import type { Department } from "@/api/departments";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { formatEmployeeName } from "@/lib/employeeName";
+import { displayEmployeeDni } from "@/lib/employeeDniDisplay";
 
 const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   activo: { label: "Activo", variant: "default" },
@@ -174,7 +175,7 @@ export default function EmployeesPage() {
       });
     } catch (e) {
       const msg =
-        e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudieron cargar los empleados";
+        e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudieron cargar los colaboradores";
       setError(typeof msg === "string" ? msg : "Error");
       setRows([]);
       setListMeta((m) => ({ ...m, total: 0, last_page: 1, current_page: 1 }));
@@ -195,7 +196,7 @@ export default function EmployeesPage() {
       await startImpersonation(userId);
       toast({
         title: "Sesión de impersonación",
-        description: "Estás viendo la plataforma como el usuario vinculado a este empleado.",
+        description: "Estás viendo la plataforma como el usuario vinculado a este colaborador.",
       });
     } catch (e) {
       const msg =
@@ -214,12 +215,12 @@ export default function EmployeesPage() {
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Empleados</h1>
+          <h1 className="text-2xl font-bold">Colaboradores</h1>
           <p className="text-muted-foreground text-sm mt-1">Gestión del personal de EnviaMas</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {hasPermission("employees.edit") ? (
-            <Link to="/empleados/renuncias">
+            <Link to="/colaboradores/renuncias">
               <Button variant="outline" className="gap-2" type="button">
                 <UserMinus className="w-4 h-4" /> Renuncias
               </Button>
@@ -273,12 +274,12 @@ export default function EmployeesPage() {
           {loading ? (
             <p className="text-sm text-muted-foreground px-5 py-12">Cargando…</p>
           ) : rows.length === 0 ? (
-            <p className="text-sm text-muted-foreground px-5 py-12">No hay empleados que coincidan con los filtros.</p>
+            <p className="text-sm text-muted-foreground px-5 py-12">No hay colaboradores que coincidan con los filtros.</p>
           ) : (
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
-                  <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Empleado</th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Colaborador</th>
                   <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">DNI</th>
                   <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Área</th>
                   <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Puesto</th>
@@ -309,7 +310,7 @@ export default function EmployeesPage() {
                           <span className="text-sm font-medium">{displayName}</span>
                         </div>
                       </td>
-                      <td className="px-5 py-3 text-sm text-muted-foreground">{emp.dni}</td>
+                      <td className="px-5 py-3 text-sm text-muted-foreground">{displayEmployeeDni(emp.dni)}</td>
                       <td className="px-5 py-3 text-sm">{area}</td>
                       <td className="px-5 py-3 text-sm">{emp.position ?? "—"}</td>
                       <td className="px-5 py-3">
@@ -320,13 +321,13 @@ export default function EmployeesPage() {
                       <td className="px-5 py-3 text-sm text-muted-foreground">{jefe}</td>
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap items-center gap-1">
-                          <Link to={`/empleados/${emp.id}`}>
+                          <Link to={`/colaboradores/${emp.id}`}>
                             <Button variant="ghost" size="sm" className="text-primary text-xs">
                               Ver perfil
                             </Button>
                           </Link>
                           {hasPermission("employees.edit") ? (
-                            <Link to={`/empleados/${emp.id}/edit`}>
+                            <Link to={`/colaboradores/${emp.id}/edit`}>
                               <Button variant="ghost" size="sm" className="text-primary text-xs" type="button">
                                 Editar
                               </Button>

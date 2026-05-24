@@ -13,7 +13,7 @@ import {
   type SalaryRevision,
 } from "@/api/salaryRevisions";
 import { ApiHttpError } from "@/api/client";
-import { formatEmployeeName } from "@/lib/employeeName";
+import { formatEmployeeFullName } from "@/lib/employeeName";
 import { formatAppDateTime } from "@/lib/formatAppDate";
 import { normalizeMoneyDecimalInput } from "@/lib/moneyDecimalInput";
 import { useToast } from "@/hooks/use-toast";
@@ -110,7 +110,7 @@ export function PayrollSalariesTab({ employeesList, canView, canEdit, onRevision
   const handleSubmit = async () => {
     const id = Number.parseInt(employeeId, 10);
     if (Number.isNaN(id) || id < 1) {
-      toast({ title: "Elige un empleado", variant: "destructive" });
+      toast({ title: "Elige un colaborador", variant: "destructive" });
       return;
     }
     const normalized = normalizeMoneyDecimalInput(newAmountStr.trim());
@@ -159,19 +159,19 @@ export function PayrollSalariesTab({ employeesList, canView, canEdit, onRevision
     <div className="space-y-6">
       <Card className="shadow-card">
         <CardHeader>
-          <CardTitle className="text-base">Empleado y sueldo vigente</CardTitle>
+          <CardTitle className="text-base">Colaborador y sueldo vigente</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1.5 max-w-md">
-            <Label>Empleado</Label>
+            <Label>Colaborador</Label>
             <Select value={employeeId} onValueChange={setEmployeeId}>
               <SelectTrigger>
-                <SelectValue placeholder="Selecciona un empleado" />
+                <SelectValue placeholder="Selecciona un colaborador" />
               </SelectTrigger>
               <SelectContent>
                 {employeesList.map((e) => (
                   <SelectItem key={e.id} value={String(e.id)}>
-                    {formatEmployeeName(e)}
+                    {formatEmployeeFullName(e)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -192,7 +192,7 @@ export function PayrollSalariesTab({ employeesList, canView, canEdit, onRevision
         </CardHeader>
         <CardContent>
           {!employeeId ? (
-            <p className="text-sm text-muted-foreground">Selecciona un empleado para ver el historial.</p>
+            <p className="text-sm text-muted-foreground">Selecciona un colaborador para ver el historial.</p>
           ) : revisionsError ? (
             <p className="text-sm text-destructive">{revisionsError}</p>
           ) : revisionsLoading ? (
@@ -240,7 +240,7 @@ export function PayrollSalariesTab({ employeesList, canView, canEdit, onRevision
           <CardContent className="space-y-4 max-w-lg">
             <p className="text-xs text-muted-foreground">
               El cambio queda historizado. No puede haber dos registros con la misma fecha de inicio de vigencia (mismo
-              mes). El perfil del empleado se actualiza con el sueldo vigente al mes actual cuando corresponde.
+              mes). El perfil del colaborador se actualiza con el sueldo vigente al mes actual cuando corresponde.
             </p>
             <div className="space-y-1.5">
               <Label htmlFor="sal-new">Nuevo sueldo (mensual)</Label>

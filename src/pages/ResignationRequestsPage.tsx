@@ -160,7 +160,7 @@ export default function ResignationRequestsPage() {
       });
       toast({
         title: "Estado actualizado",
-        description: "Se aplicó la corrección y se notificó al empleado en el portal.",
+        description: "Se aplicó la corrección y se notificó al colaborador en el portal.",
       });
       setCorrectionRow(null);
       setCorrectionStatus("");
@@ -188,7 +188,7 @@ export default function ResignationRequestsPage() {
       });
       toast({
         title: decisionKind === "aprobada" ? "Solicitud aprobada" : "Solicitud rechazada",
-        description: "Se notificó al empleado en el portal.",
+        description: "Se notificó al colaborador en el portal.",
       });
       setDecisionRow(null);
       setDecisionKind(null);
@@ -206,16 +206,16 @@ export default function ResignationRequestsPage() {
     <div className="space-y-6 p-6 max-w-6xl mx-auto">
       <div>
         <Link
-          to="/empleados"
+          to="/colaboradores"
           className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 mb-2"
         >
           <ChevronLeft className="w-4 h-4" />
-          Empleados
+          Colaboradores
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight">Renuncias y cese</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Cartas enviadas desde el portal del empleado. La aprobación documental no confirma el cese laboral; completa el
-          proceso en la ficha del empleado.
+          Cartas enviadas desde el portal del colaborador. La aprobación documental no confirma el cese laboral; completa el
+          proceso en la ficha del colaborador.
         </p>
       </div>
 
@@ -262,7 +262,7 @@ export default function ResignationRequestsPage() {
                 </colgroup>
                 <thead>
                   <tr className="border-b border-border bg-muted/50">
-                    <th className="text-left font-semibold text-muted-foreground px-2 py-2">Empleado</th>
+                    <th className="text-left font-semibold text-muted-foreground px-2 py-2">Colaborador</th>
                     <th className="text-left font-semibold text-muted-foreground px-2 py-2">F. prop.</th>
                     <th className="text-left font-semibold text-muted-foreground px-2 py-2">Enviada</th>
                     <th className="text-left font-semibold text-muted-foreground px-2 py-2">Detalle</th>
@@ -279,7 +279,7 @@ export default function ResignationRequestsPage() {
                               first_name: row.employee.first_name,
                               last_name: row.employee.last_name,
                             })
-                          : `Empleado #${row.employee_id}`}
+                          : `Colaborador #${row.employee_id}`}
                       </td>
                       <td className="px-2 py-2 tabular-nums text-muted-foreground align-top whitespace-nowrap">
                         {row.proposed_effective_date != null ? formatAppDate(row.proposed_effective_date) : "—"}
@@ -399,13 +399,13 @@ export default function ResignationRequestsPage() {
                 value={rejectReason}
                 onChange={e => setRejectReason(e.target.value)}
                 rows={4}
-                placeholder="Visible para el empleado en el portal."
+                placeholder="Visible para el colaborador en el portal."
               />
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Se marcará la solicitud como aprobada a nivel documental y se notificará al empleado. El cese formal se
-              gestiona aparte en la ficha del empleado.
+              Se marcará la solicitud como aprobada a nivel documental y se notificará al colaborador. El cese formal se
+              gestiona aparte en la ficha del colaborador.
             </p>
           )}
           <DialogFooter className="gap-2 sm:gap-0">
@@ -436,7 +436,7 @@ export default function ResignationRequestsPage() {
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
                 Estado actual: <span className="font-medium text-foreground">{statusLabel(correctionRow.status)}</span>.
-                Usa esto si hubo un error en la decisión; el empleado recibirá una notificación en el portal.
+                Usa esto si hubo un error en la decisión; el colaborador recibirá una notificación en el portal.
               </p>
               <div className="space-y-1.5">
                 <span className="text-sm font-medium">Nuevo estado</span>
@@ -471,7 +471,7 @@ export default function ResignationRequestsPage() {
                     value={correctionRejectReason}
                     onChange={e => setCorrectionRejectReason(e.target.value)}
                     rows={3}
-                    placeholder="Visible para el empleado en el portal."
+                    placeholder="Visible para el colaborador en el portal."
                   />
                 </div>
               ) : null}

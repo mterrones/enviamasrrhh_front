@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { NotificationsPanel } from "@/components/notifications/NotificationsPanel";
 import { RoleSwitcher } from "@/components/auth/RoleSwitcher";
-import { useAuth, ROLE_LABELS } from "@/contexts/AuthContext";
+import { useAuth, ROLE_LABELS, resolveDisplayRole } from "@/contexts/AuthContext";
 import { useNotifications } from "@/contexts/NotificationsContext";
 
 interface Props {
@@ -24,6 +24,12 @@ export function TopBar({ onToggleSidebar }: Props) {
   const [leavingImpersonation, setLeavingImpersonation] = useState(false);
   const initials = user?.nombre?.split(" ").map((n) => n[0]).join("").slice(0, 2) ?? "?";
   const isImpersonating = Boolean(user?.impersonation?.active);
+  const displayRole = resolveDisplayRole(user);
+  const profileRoleLabel = displayRole ? ROLE_LABELS[displayRole] : "";
+  const targetRoleLabel = user ? ROLE_LABELS[user.rol] : "";
+  const profileSubtitle = isImpersonating
+    ? `${profileRoleLabel} · viendo como ${targetRoleLabel}`
+    : profileRoleLabel;
 
   const handleLeaveImpersonation = () => {
     setLeavingImpersonation(true);
@@ -113,7 +119,7 @@ export function TopBar({ onToggleSidebar }: Props) {
               </Avatar>
               <div className="text-left hidden sm:block">
                 <p className="text-sm font-medium leading-tight">{user?.nombre}</p>
-                <p className="text-xs text-muted-foreground">{user ? ROLE_LABELS[user.rol] : ""}</p>
+                <p className="text-xs text-muted-foreground">{profileSubtitle}</p>
               </div>
             </button>
           </DropdownMenuTrigger>

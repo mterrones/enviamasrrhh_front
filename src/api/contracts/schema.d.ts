@@ -2736,6 +2736,8 @@ export interface components {
             role?: components["schemas"]["AppRole"];
             /** @description Effective RBAC permission slugs for the current user */
             permissions?: string[];
+            /** @description Target user permissions without impersonation actor merge */
+            target_permissions?: string[];
             avatar_path?: string | null;
             department_id?: number | null;
             department?: components["schemas"]["Department"] | null;
@@ -2744,12 +2746,13 @@ export interface components {
                 first_name: string;
                 last_name: string;
             };
-            impersonation?: {
-                active: boolean;
+            impersonation?: null | {
+                active: true;
                 actor_id: number;
                 actor_name: string;
                 actor_email: string;
-            } | null;
+                actor_role?: components["schemas"]["AppRole"] | null;
+            };
         };
         UserMeEnvelope: {
             data: components["schemas"]["UserMe"];
@@ -2785,8 +2788,10 @@ export interface components {
             department_id?: number | null;
             manager_id?: number | null;
             first_name: string;
+            middle_name?: string | null;
             last_name: string;
-            dni: string;
+            second_last_name?: string | null;
+            dni?: string | null;
             /** Format: date */
             birth_date?: string | null;
             education_level?: string | null;
@@ -2803,6 +2808,7 @@ export interface components {
             emergency_contact_phone?: string | null;
             bank?: string | null;
             bank_account?: string | null;
+            bank_account_cci?: string | null;
             pension_fund?: string | null;
             position?: string | null;
             modality?: string | null;
@@ -2825,8 +2831,10 @@ export interface components {
             department_id?: number | null;
             manager_id?: number | null;
             first_name: string;
+            middle_name?: string | null;
             last_name: string;
-            dni: string;
+            second_last_name?: string | null;
+            dni?: string | null;
             /** Format: date */
             birth_date?: string | null;
             education_level?: string | null;
@@ -2839,6 +2847,7 @@ export interface components {
             emergency_contact_phone?: string | null;
             bank?: string | null;
             bank_account?: string | null;
+            bank_account_cci?: string | null;
             pension_fund?: string | null;
             position?: string | null;
             modality?: string | null;
@@ -2976,7 +2985,7 @@ export interface components {
             links: components["schemas"]["PaginationLinks"];
         };
         /** @enum {string} */
-        EmployeeDocumentType: "antecedentes" | "cv" | "medical_exam" | "contract" | "termination_certificate";
+        EmployeeDocumentType: "dni_scan" | "antecedentes" | "cv" | "medical_exam" | "contract" | "termination_certificate";
         EmployeeDocument: {
             id: number;
             employee_id: number;
@@ -3167,6 +3176,7 @@ export interface components {
             employee_id: number;
             gross_amount: string;
             deductions_amount: string;
+            extraordinary_bonus_amount?: string;
             net_amount: string;
             status: string;
             /** @description May include payslip_breakdown (see PayslipBreakdown) and custom keys. legal_parameters_context is populated on create by the server. */
@@ -3189,6 +3199,7 @@ export interface components {
         PayslipAmountsPatch: {
             gross_amount: number;
             deductions_amount?: number;
+            extraordinary_bonus_amount?: number;
             net_amount: number;
             /** @description Merge AFP/ONP line into meta.payslip_breakdown. */
             apply_previsional_assist?: boolean;
@@ -3290,6 +3301,7 @@ export interface components {
             employee_id: number;
             gross_amount: number;
             deductions_amount?: number;
+            extraordinary_bonus_amount?: number;
             net_amount: number;
             status?: string;
             /**
