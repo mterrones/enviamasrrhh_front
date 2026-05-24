@@ -6,6 +6,7 @@ import { buildApiUrl } from "@/api/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { INACTIVE_LOGOUT_SESSION_KEY } from "@/constants/inactivity";
 import { oauthErrorMessage } from "@/lib/oauthErrors";
+import { AppLogoMark } from "@/components/layout/AppLogoMark";
 
 function readInactiveLogoutFlag(): boolean {
   try {
@@ -78,9 +79,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-md shadow-card-hover">
         <CardContent className="p-8 flex flex-col items-center space-y-6">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-xl gradient-primary flex items-center justify-center">
-              <span className="text-primary-foreground font-bold text-lg">EM</span>
-            </div>
+            <AppLogoMark size="md" />
             <div>
               <h1 className="text-xl font-bold">EnviaMas RRHH</h1>
               <p className="text-xs text-muted-foreground">Plataforma de Recursos Humanos</p>

@@ -157,10 +157,37 @@ export async function fetchPortalPayslipsPage(params: { page?: number; per_page?
   );
 }
 
-export async function fetchPortalVacationRequestsPage(params: { page?: number; per_page?: number } = {}) {
+export async function fetchPortalVacationRequestsPage(params: {
+  page?: number;
+  per_page?: number;
+  status?: string;
+} = {}) {
   return apiRequest<PortalVacationEnvelope>(
-    `/portal/vacation-requests${buildQuery({ page: params.page, per_page: params.per_page })}`,
+    `/portal/vacation-requests${buildQuery({
+      page: params.page,
+      per_page: params.per_page,
+      status: params.status,
+    })}`,
   );
+}
+
+export async function fetchAllApprovedPortalVacations(): Promise<components["schemas"]["VacationRequest"][]> {
+  const perPage = AGGREGATION_PAGE_SIZE;
+  let page = 1;
+  let lastPage = 1;
+  const rows: components["schemas"]["VacationRequest"][] = [];
+  do {
+    const res = await fetchPortalVacationRequestsPage({
+      status: "aprobado",
+      per_page: perPage,
+      page,
+    });
+    rows.push(...res.data);
+    lastPage = Math.max(1, res.meta.last_page ?? 1);
+    page += 1;
+  } while (page <= lastPage);
+
+  return rows;
 }
 
 export async function fetchPortalResignationRequestsPage(params: {
@@ -352,8 +379,12 @@ export async function deletePortalResignationRequest(id: number) {
 
 export type PortalPersonalSnapshot = {
   first_name: string | null;
+  middle_name: string | null;
   last_name: string | null;
+  second_last_name: string | null;
+  document_type: string | null;
   dni: string | null;
+  employee_code: string | null;
   birth_date: string | null;
   education_level: string | null;
   degree: string | null;
@@ -382,10 +413,16 @@ export type PortalContact = {
   emergency_contact_phone: string | null;
   bank: string | null;
   bank_account: string | null;
+  bank_account_cci: string | null;
   pension_fund: string | null;
+  employer_contribution_option: "essalud" | "sis_microempresa" | null;
+  cuspp: string | null;
+  dependents_count: number | null;
+  has_family_allowance: boolean | null;
   personal: PortalPersonalSnapshot;
   work: PortalWorkSnapshot;
   has_employee_photo_file: boolean;
+  has_employee_signature_file: boolean;
 };
 
 export type PortalEmployeeDocumentRow = {
@@ -418,13 +455,18 @@ export async function fetchPortalDocuments() {
   return apiRequest<{ data: PortalEmployeeDocumentRow[] }>("/portal/documents");
 }
 
-export async function downloadPortalEmployeeDocumentBlob(documentId: number): Promise<Blob> {
+export async function downloadPortalEmployeeDocumentBlob(
+  documentId: number,
+  options?: { attachment?: boolean },
+): Promise<Blob> {
+  const attachment = options?.attachment !== false;
+  const qs = attachment ? "?attachment=1" : "?attachment=0";
   const headers = new Headers();
   const token = getAuthToken();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);
   }
-  const res = await fetch(buildApiUrl(`/portal/documents/${documentId}/file?attachment=1`), { headers });
+  const res = await fetch(buildApiUrl(`/portal/documents/${documentId}/file${qs}`), { headers });
   if (!res.ok) {
     const text = await res.text();
     let parsed: unknown = text;
@@ -458,6 +500,41 @@ export async function fetchPortalEmployeePhotoBlob(): Promise<Blob> {
   return res.blob();
 }
 
+export async function fetchPortalEmployeeSignatureBlob(): Promise<Blob> {
+  const headers = new Headers();
+  const token = getAuthToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  const res = await fetch(buildApiUrl("/portal/employee-signature"), { headers });
+  if (!res.ok) {
+    const text = await res.text();
+    let parsed: unknown = text;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = { message: text || res.statusText };
+    }
+    throw new ApiHttpError(res.status, parsed);
+  }
+  return res.blob();
+}
+
+export async function uploadPortalEmployeeSignature(file: File) {
+  const formData = new FormData();
+  formData.set("signature", file);
+  return apiRequest<{ data: { signature_image_path: string } }>("/portal/employee-signature", {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export async function deletePortalEmployeeSignature() {
+  return apiRequest<{ data: { signature_image_path: null } }>("/portal/employee-signature", {
+    method: "DELETE",
+  });
+}
+
 export async function patchPortalContact(body: {
   phone?: string | null;
   personal_email?: string | null;
@@ -465,7 +542,9 @@ export async function patchPortalContact(body: {
   emergency_contact_phone?: string | null;
   bank?: string | null;
   bank_account?: string | null;
+  bank_account_cci?: string | null;
   pension_fund?: string | null;
+  employer_contribution_option?: "essalud" | "sis_microempresa" | null;
 }) {
   return apiRequest<PortalContactEnvelope>("/portal/contact", {
     method: "PATCH",

@@ -483,7 +483,7 @@ export default function ReportsPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
-                  {["Empleado", "Área", "Tipo contrato", "Vencimiento"].map((h) => (
+                  {["Colaborador", "Área", "Tipo contrato", "Vencimiento"].map((h) => (
                     <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">
                       {h}
                     </th>
@@ -557,7 +557,7 @@ export default function ReportsPage() {
               <table className="w-full min-w-[640px]">
                 <thead>
                   <tr className="border-b border-border bg-muted/50">
-                    {["Fecha", "Empleado", "Estado", "Entrada", "Salida"].map((h) => (
+                    {["Fecha", "Colaborador", "Estado", "Entrada", "Salida"].map((h) => (
                       <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">
                         {h}
                       </th>
@@ -691,7 +691,7 @@ export default function ReportsPage() {
               <table className="w-full min-w-[560px]">
                 <thead>
                   <tr className="border-b border-border bg-muted/50">
-                    {["Empleado", "Bruto", "Descuentos", "Neto", "Estado"].map((h) => (
+                    {["Colaborador", "Bruto", "Descuentos", "Neto", "Estado"].map((h) => (
                       <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">
                         {h}
                       </th>

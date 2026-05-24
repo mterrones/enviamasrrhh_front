@@ -14,7 +14,7 @@ export default function EmployeeProfileRoute() {
 
   const n = id != null ? Number(id) : NaN;
   if (id == null || Number.isNaN(n)) {
-    return <Navigate to="/empleados" replace />;
+    return <Navigate to="/colaboradores" replace />;
   }
 
   if (hasPermission("employees.view")) {

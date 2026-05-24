@@ -120,7 +120,7 @@ function linkForApproverUserNotification(
   const employeeId = parseMetaEmployeeId(meta ?? null);
 
   if (k === "resignation.pending" || k.startsWith("resignation.")) {
-    return employeeId != null ? `/empleados/${employeeId}` : "/empleados/renuncias";
+    return employeeId != null ? `/colaboradores/${employeeId}` : "/colaboradores/renuncias";
   }
   if (k === "vacation.pending" || k.startsWith("vacation.")) {
     if (employeeId != null) {

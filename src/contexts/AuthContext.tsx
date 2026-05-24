@@ -19,6 +19,7 @@ export type ImpersonationBanner = {
   actor_id: number;
   actor_name: string;
   actor_email: string;
+  actor_role?: AppRole;
 };
 
 export interface User {
@@ -28,6 +29,7 @@ export interface User {
   avatar?: string;
   rol: AppRole;
   permissions?: string[];
+  targetPermissions?: string[];
   area?: string;
   employee?: {
     id: number;
@@ -40,25 +42,52 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   superadmin_rrhh: "Superadmin RRHH",
   admin_rrhh: "Admin RRHH",
   jefe_area: "Jefe de Área",
-  empleado: "Empleado",
+  empleado: "Colaborador",
 };
 
 const APP_ROLES: AppRole[] = ["superadmin_rrhh", "admin_rrhh", "jefe_area", "empleado"];
 
-function toAppUser(me: components["schemas"]["UserMe"]): User {
-  const rol: AppRole =
-    me.role && APP_ROLES.includes(me.role as AppRole) ? (me.role as AppRole) : "empleado";
+export function normalizeAppRole(raw: string | null | undefined): AppRole {
+  if (!raw) return "empleado";
+  let slug = raw.trim().toLowerCase().replace(/[\s-]+/g, "_").replace(/_+/g, "_");
+  if (slug === "jefe_de_area") slug = "jefe_area";
+  if (slug === "colaborador") slug = "empleado";
+  return APP_ROLES.includes(slug as AppRole) ? (slug as AppRole) : "empleado";
+}
 
-  const imp = me.impersonation;
+export function resolveDisplayRole(user: User | null): AppRole | null {
+  if (!user) return null;
+  if (user.impersonation?.active && user.impersonation.actor_role) {
+    return user.impersonation.actor_role;
+  }
+  return user.rol;
+}
+
+function toAppUser(me: components["schemas"]["UserMe"]): User {
+  const rol = normalizeAppRole(me.role ?? undefined);
+
+  const imp = me.impersonation as
+    | {
+        active?: boolean;
+        actor_id?: number;
+        actor_name?: string;
+        actor_email?: string;
+        actor_role?: string | null;
+      }
+    | null
+    | undefined;
   const impersonation: ImpersonationBanner | undefined =
     imp?.active === true && typeof imp.actor_id === "number"
       ? {
           active: true,
           actor_id: imp.actor_id,
-          actor_name: imp.actor_name,
-          actor_email: imp.actor_email,
+          actor_name: imp.actor_name ?? "",
+          actor_email: imp.actor_email ?? "",
+          actor_role: imp.actor_role ? normalizeAppRole(imp.actor_role) : undefined,
         }
       : undefined;
+
+  const targetPerms = (me as { target_permissions?: string[] }).target_permissions;
 
   return {
     id: String(me.id),
@@ -67,6 +96,7 @@ function toAppUser(me: components["schemas"]["UserMe"]): User {
     avatar: me.avatar_path ?? undefined,
     rol,
     permissions: Array.isArray(me.permissions) ? me.permissions : undefined,
+    targetPermissions: Array.isArray(targetPerms) ? targetPerms : undefined,
     area: me.department?.name,
     employee: me.employee
       ? { id: me.employee.id, fullName: formatEmployeeName(me.employee) }
@@ -85,7 +115,7 @@ const ROLE_PERMISSIONS: Record<AppRole, string[]> = {
     "portal.view",
     "assets.view", "assets.manage",
     "reports.view", "reports.export",
-    "settings.view", "settings.users", "settings.smtp", "settings.params", "settings.audit", "settings.backup", "settings.profiles",
+    "settings.view", "settings.users", "settings.departments", "settings.params", "settings.audit", "settings.backup", "settings.profiles",
   ],
   admin_rrhh: [
     "dashboard.view",
@@ -95,6 +125,7 @@ const ROLE_PERMISSIONS: Record<AppRole, string[]> = {
     "portal.view",
     "assets.view", "assets.manage",
     "reports.view", "reports.export",
+    "settings.view", "settings.users", "settings.departments", "settings.params",
   ],
   jefe_area: [
     "dashboard.view",
@@ -112,6 +143,17 @@ const ROLE_PERMISSIONS: Record<AppRole, string[]> = {
   ],
 };
 
+export function resolvePermission(
+  permission: string,
+  roleDefaults: string[],
+  permissionsFromApi?: string[],
+): boolean {
+  if (permissionsFromApi !== undefined) {
+    return permissionsFromApi.includes(permission);
+  }
+  return roleDefaults.includes(permission);
+}
+
 interface AuthContextType {
   user: User | null;
   initializing: boolean;
@@ -121,6 +163,8 @@ interface AuthContextType {
   logout: () => Promise<void>;
   hasPermission: (permission: string) => boolean;
   hasAnyPermission: (permissions: string[]) => boolean;
+  hasTargetPermission: (permission: string) => boolean;
+  hasAnyTargetPermission: (permissions: string[]) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -186,17 +230,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return Array.isArray(fromApi) && fromApi.includes(permission);
       }
       const roleDefaults = ROLE_PERMISSIONS[user.rol] ?? [];
-      if (fromApi !== undefined) {
-        return fromApi.includes(permission) || roleDefaults.includes(permission);
-      }
-      return roleDefaults.includes(permission);
+      return resolvePermission(permission, roleDefaults, fromApi);
     },
     [user],
+  );
+
+  const hasTargetPermission = useCallback(
+    (permission: string) => {
+      if (!user) return false;
+      const impersonating = user.impersonation?.active === true;
+      if (!impersonating) {
+        return hasPermission(permission);
+      }
+      const fromTarget = user.targetPermissions;
+      const roleDefaults = ROLE_PERMISSIONS[user.rol] ?? [];
+      return resolvePermission(permission, roleDefaults, fromTarget);
+    },
+    [user, hasPermission],
   );
 
   const hasAnyPermission = useCallback(
     (permissions: string[]) => permissions.some((p) => hasPermission(p)),
     [hasPermission],
+  );
+
+  const hasAnyTargetPermission = useCallback(
+    (permissions: string[]) => permissions.some((p) => hasTargetPermission(p)),
+    [hasTargetPermission],
   );
 
   return (
@@ -210,6 +270,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logout,
         hasPermission,
         hasAnyPermission,
+        hasTargetPermission,
+        hasAnyTargetPermission,
       }}
     >
       {children}

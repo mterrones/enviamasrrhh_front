@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,11 +7,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ListPaginationBar } from "@/components/ListPaginationBar";
-import { Users, Mail, Shield, FileText, Database, Building2, Pencil, Trash2, Copy, Plus } from "lucide-react";
+import { Users, Shield, FileText, Database, Building2, Pencil, Trash2, Copy, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { components } from "@/api/contracts";
 import { ApiHttpError } from "@/api/client";
@@ -29,12 +28,20 @@ import {
   patchLegalParameter,
   type LegalParameterListItem,
 } from "@/api/legalParameters";
-import { fetchMailSettings, sendMailTest, updateMailSettings } from "@/api/mailSettings";
+import {
+  deleteCompanyEmployerSignature,
+  fetchCompanyEmployerSignatureBlob,
+  fetchCompanyProfile,
+  patchCompanyProfile,
+  uploadCompanyEmployerSignature,
+} from "@/api/companyProfile";
 import { createUserInvitation, fetchUsersPage, setUserActive, updateUser, type UserAdminUpdate } from "@/api/users";
 import { ROLE_LABELS, type AppRole, useAuth } from "@/contexts/AuthContext";
 import { DEFAULT_LIST_PAGE_SIZE } from "@/constants/pagination";
 import { formatAppDateTime } from "@/lib/formatAppDate";
-import { normalizeMoneyDecimalInput } from "@/lib/moneyDecimalInput";
+import { normalizeMoneyDecimalInput, normalizeRatioDecimalInput } from "@/lib/moneyDecimalInput";
+import { formatDecimalDisplay } from "@/lib/formatDecimalDisplay";
+import { cn } from "@/lib/utils";
 
 function formatAuditDate(iso: string | null): string {
   return formatAppDateTime(iso);
@@ -102,12 +109,11 @@ function formatApiValidationMessage(err: ApiHttpError): string {
   return ae.message;
 }
 
-function formatLegalValueForInput(unit: string, value: string | null | undefined): string {
+function formatLegalValueForInput(_unit: string, value: string | null | undefined): string {
   if (value == null || value === "") return "";
   const n = Number(value);
   if (Number.isNaN(n)) return "";
-  if (unit === "pen") return n.toFixed(2);
-  return String(value).trim();
+  return formatDecimalDisplay(value);
 }
 
 function parseLegalDraftForApi(unit: string, draft: string): number | null {
@@ -157,11 +163,35 @@ function compareIsoDateStrings(a: string, b: string): number {
   return a < b ? -1 : 1;
 }
 
+type CompanyFormSnapshot = {
+  legalName: string;
+  ruc: string;
+  industry: string;
+  fiscalAddress: string;
+  laborCenter: string;
+  employerSignerName: string;
+  employerSignaturePreview: string | null;
+  hasEmployerSignatureFile: boolean;
+};
+
+function buildLegalDraftsFromParams(params: LegalParameterListItem[]): Record<string, string> {
+  const drafts: Record<string, string> = {};
+  for (const p of params) {
+    drafts[p.key] = formatLegalValueForInput(p.unit, p.value ?? undefined);
+  }
+  return drafts;
+}
+
+const readOnlyFieldClass = "bg-muted cursor-default";
+
 export default function SettingsPage() {
   const { toast } = useToast();
   const { user: authUser, hasPermission } = useAuth();
+  const canManageUsers = hasPermission("settings.users");
   const canBackupTab = hasPermission("settings.backup");
+  const canAuditTab = hasPermission("settings.audit");
   const canManageDepartments = hasPermission("settings.departments");
+  const canAssignSuperadmin = authUser?.rol === "superadmin_rrhh";
   const [activeTab, setActiveTab] = useState("usuarios");
   const [usuarios, setUsuarios] = useState<components["schemas"]["UserAdmin"][]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -181,7 +211,8 @@ export default function SettingsPage() {
   const [inviteCreated, setInviteCreated] = useState<{ inviteUrl: string; expiresAt: string } | null>(null);
   const [activeToggleUserId, setActiveToggleUserId] = useState<number | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [departmentsLoading, setDepartmentsLoading] = useState(true);
+  const [departmentsLoading, setDepartmentsLoading] = useState(false);
+  const [departmentsLoaded, setDepartmentsLoaded] = useState(false);
   const [departmentsError, setDepartmentsError] = useState<string | null>(null);
   const [deptFormOpen, setDeptFormOpen] = useState(false);
   const [deptFormSaving, setDeptFormSaving] = useState(false);
@@ -216,68 +247,25 @@ export default function SettingsPage() {
   const [legalVigenciaSource, setLegalVigenciaSource] = useState("");
   const [legalVigenciaStep, setLegalVigenciaStep] = useState<0 | 1>(0);
   const [legalVigenciaSaving, setLegalVigenciaSaving] = useState(false);
-
-  const [smtpLoading, setSmtpLoading] = useState(false);
-  const [smtpError, setSmtpError] = useState<string | null>(null);
-  const [smtpForbidden, setSmtpForbidden] = useState(false);
-  const [smtpSaving, setSmtpSaving] = useState(false);
-  const [smtpTesting, setSmtpTesting] = useState(false);
-  const [smtpEnabled, setSmtpEnabled] = useState(false);
-  const [smtpHost, setSmtpHost] = useState("");
-  const [smtpPort, setSmtpPort] = useState("");
-  const [smtpEncryption, setSmtpEncryption] = useState<"none" | "tls" | "ssl">("none");
-  const [smtpUsername, setSmtpUsername] = useState("");
-  const [smtpPassword, setSmtpPassword] = useState("");
-  const [smtpFromAddress, setSmtpFromAddress] = useState("");
-  const [smtpFromName, setSmtpFromName] = useState("");
-  const [smtpPasswordSet, setSmtpPasswordSet] = useState(false);
-  const [smtpTestTo, setSmtpTestTo] = useState("");
-
-  const applyMailSettingsToForm = useCallback((d: components["schemas"]["MailSettings"]) => {
-    setSmtpEnabled(Boolean(d.enabled));
-    setSmtpHost(d.host?.trim() ? d.host : "");
-    setSmtpPort(d.port != null && d.port > 0 ? String(d.port) : "");
-    const enc = d.encryption;
-    setSmtpEncryption(enc === "tls" || enc === "ssl" ? enc : "none");
-    setSmtpUsername(d.username?.trim() ? d.username : "");
-    setSmtpPassword("");
-    setSmtpFromAddress(d.from_address?.trim() ? d.from_address : "");
-    setSmtpFromName(d.from_name?.trim() ? d.from_name : "");
-    setSmtpPasswordSet(Boolean(d.password_set));
-  }, []);
-
-  const loadMailSettings = useCallback(async () => {
-    if (!hasPermission("settings.smtp")) return;
-    setSmtpLoading(true);
-    setSmtpError(null);
-    setSmtpForbidden(false);
-    try {
-      const r = await fetchMailSettings();
-      applyMailSettingsToForm(r.data);
-    } catch (e) {
-      if (e instanceof ApiHttpError && e.status === 403) {
-        setSmtpForbidden(true);
-        setSmtpPasswordSet(false);
-      } else {
-        const msg =
-          e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudo cargar la configuración SMTP";
-        setSmtpError(typeof msg === "string" ? msg : "No se pudo cargar la configuración SMTP");
-        toast({
-          title: "SMTP",
-          description: typeof msg === "string" ? msg : "Error al cargar",
-          variant: "destructive",
-        });
-      }
-    } finally {
-      setSmtpLoading(false);
-    }
-  }, [applyMailSettingsToForm, hasPermission, toast]);
-
-  useEffect(() => {
-    if (activeTab !== "smtp") return;
-    if (!hasPermission("settings.smtp")) return;
-    void loadMailSettings();
-  }, [activeTab, hasPermission, loadMailSettings]);
+  const [companyLegalName, setCompanyLegalName] = useState("");
+  const [companyRuc, setCompanyRuc] = useState("");
+  const [companyIndustry, setCompanyIndustry] = useState("");
+  const [companyFiscalAddress, setCompanyFiscalAddress] = useState("");
+  const [companyLaborCenter, setCompanyLaborCenter] = useState("");
+  const [companyEmployerSignerName, setCompanyEmployerSignerName] = useState("");
+  const [companyEmployerSignaturePreview, setCompanyEmployerSignaturePreview] = useState<string | null>(null);
+  const [companyEmployerSignatureFile, setCompanyEmployerSignatureFile] = useState<File | null>(null);
+  const [companyEmployerSignatureMarkedForRemoval, setCompanyEmployerSignatureMarkedForRemoval] = useState(false);
+  const [companyHasEmployerSignatureFile, setCompanyHasEmployerSignatureFile] = useState(false);
+  const [companyLoading, setCompanyLoading] = useState(false);
+  const [companySaving, setCompanySaving] = useState(false);
+  const [companyEditing, setCompanyEditing] = useState(false);
+  const [legalEditing, setLegalEditing] = useState(false);
+  const companySnapshotRef = useRef<CompanyFormSnapshot | null>(null);
+  const companySignatureInputRef = useRef<HTMLInputElement | null>(null);
+  const companySignatureObjectUrlRef = useRef<string | null>(null);
+  const legalDraftsSnapshotRef = useRef<Record<string, string> | null>(null);
+  const canEditParams = hasPermission("settings.params");
 
   const loadDepartments = useCallback(async () => {
     setDepartmentsLoading(true);
@@ -285,6 +273,7 @@ export default function SettingsPage() {
     try {
       const list = await fetchDepartments();
       setDepartments(list);
+      setDepartmentsLoaded(true);
     } catch (e) {
       const msg =
         e instanceof ApiHttpError
@@ -292,6 +281,7 @@ export default function SettingsPage() {
           : "No se pudieron cargar las áreas";
       setDepartmentsError(typeof msg === "string" ? msg : "No se pudieron cargar las áreas");
       setDepartments([]);
+      setDepartmentsLoaded(false);
       toast({ title: "Áreas", description: typeof msg === "string" ? msg : "Error al cargar", variant: "destructive" });
     } finally {
       setDepartmentsLoading(false);
@@ -299,8 +289,10 @@ export default function SettingsPage() {
   }, [toast]);
 
   useEffect(() => {
-    loadDepartments();
-  }, [loadDepartments]);
+    const needsDepartments = activeTab === "areas" || (userFormOpen && !inviteCreated);
+    if (!needsDepartments || departmentsLoaded || departmentsLoading) return;
+    void loadDepartments();
+  }, [activeTab, userFormOpen, inviteCreated, departmentsLoaded, departmentsLoading, loadDepartments]);
 
   const loadAuditLogs = useCallback(async () => {
     setAuditLoading(true);
@@ -330,8 +322,8 @@ export default function SettingsPage() {
     }
   }, [activeTab, loadAuditLogs]);
 
-  const loadLegalParams = useCallback(async () => {
-    if (!hasPermission("settings.params")) return;
+  const loadLegalParams = useCallback(async (): Promise<Record<string, string> | null> => {
+    if (!hasPermission("settings.params")) return null;
     setLegalLoading(true);
     setLegalError(null);
     setLegalForbidden(false);
@@ -339,12 +331,10 @@ export default function SettingsPage() {
       const r = await fetchLegalParameters();
       setLegalParams(r.data);
       setLegalAt(r.at);
-      const drafts: Record<string, string> = {};
-      for (const p of r.data) {
-        drafts[p.key] = formatLegalValueForInput(p.unit, p.value ?? undefined);
-      }
+      const drafts = buildLegalDraftsFromParams(r.data);
       setLegalDrafts(drafts);
       setLegalValidationErrorKey(null);
+      return drafts;
     } catch (e) {
       if (e instanceof ApiHttpError && e.status === 403) {
         setLegalForbidden(true);
@@ -357,16 +347,82 @@ export default function SettingsPage() {
         setLegalParams([]);
         setLegalDrafts({});
       }
+      return null;
     } finally {
       setLegalLoading(false);
     }
   }, [hasPermission]);
 
+  const setCompanySignaturePreview = useCallback((nextUrl: string | null) => {
+    if (companySignatureObjectUrlRef.current) {
+      URL.revokeObjectURL(companySignatureObjectUrlRef.current);
+      companySignatureObjectUrlRef.current = null;
+    }
+    if (nextUrl?.startsWith("blob:")) {
+      companySignatureObjectUrlRef.current = nextUrl;
+    }
+    setCompanyEmployerSignaturePreview(nextUrl);
+  }, []);
+
+  const loadCompanyProfile = useCallback(async () => {
+    if (!hasPermission("settings.params")) return;
+    setCompanyLoading(true);
+    try {
+      const r = await fetchCompanyProfile();
+      setCompanyLegalName(r.data.legal_name ?? "");
+      setCompanyRuc(r.data.ruc ?? "");
+      setCompanyIndustry(r.data.industry ?? "");
+      setCompanyFiscalAddress(r.data.fiscal_address ?? "");
+      setCompanyLaborCenter(r.data.labor_center ?? "");
+      setCompanyEmployerSignerName(r.data.employer_signer_name ?? "");
+      setCompanyEmployerSignatureFile(null);
+      setCompanyEmployerSignatureMarkedForRemoval(false);
+      const hasStoredSignature = Boolean((r.data.employer_signature_path ?? "").trim());
+      setCompanyHasEmployerSignatureFile(hasStoredSignature);
+      if (hasStoredSignature) {
+        try {
+          const blob = await fetchCompanyEmployerSignatureBlob();
+          setCompanySignaturePreview(URL.createObjectURL(blob));
+        } catch {
+          setCompanySignaturePreview(null);
+        }
+      } else {
+        setCompanySignaturePreview(null);
+      }
+    } catch (e) {
+      const msg =
+        e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudo cargar el perfil de empresa";
+      toast({ title: "Empresa", description: typeof msg === "string" ? msg : "Error al cargar", variant: "destructive" });
+    } finally {
+      setCompanyLoading(false);
+    }
+  }, [hasPermission, toast, setCompanySignaturePreview]);
+
   useEffect(() => {
     if (activeTab !== "parametros") return;
     if (!hasPermission("settings.params")) return;
     void loadLegalParams();
-  }, [activeTab, hasPermission, loadLegalParams]);
+    void loadCompanyProfile();
+  }, [activeTab, hasPermission, loadLegalParams, loadCompanyProfile]);
+
+  useEffect(() => {
+    if (activeTab === "parametros") return;
+    setCompanyEditing(false);
+    setCompanyEmployerSignatureFile(null);
+    setCompanyEmployerSignatureMarkedForRemoval(false);
+    setLegalEditing(false);
+    companySnapshotRef.current = null;
+    legalDraftsSnapshotRef.current = null;
+    setLegalValidationErrorKey(null);
+  }, [activeTab]);
+
+  useEffect(() => {
+    return () => {
+      if (companySignatureObjectUrlRef.current) {
+        URL.revokeObjectURL(companySignatureObjectUrlRef.current);
+      }
+    };
+  }, []);
 
   const legalHasPendingEdits = useMemo(() => {
     return legalParams.some((p) => {
@@ -375,13 +431,31 @@ export default function SettingsPage() {
     });
   }, [legalParams, legalDrafts]);
 
+  const assignableRoles = useMemo(() => {
+    if (canAssignSuperadmin) return systemRoles;
+    return systemRoles.filter((r) => r.slug !== "superadmin_rrhh");
+  }, [canAssignSuperadmin, systemRoles]);
+
   useEffect(() => {
     if (activeTab === "backup" && !canBackupTab) {
       setActiveTab("usuarios");
     }
   }, [activeTab, canBackupTab]);
 
+  useEffect(() => {
+    if (canManageUsers) return;
+    if (activeTab !== "usuarios") return;
+    if (canManageDepartments) {
+      setActiveTab("areas");
+      return;
+    }
+    if (hasPermission("settings.params")) {
+      setActiveTab("parametros");
+    }
+  }, [activeTab, canManageUsers, canManageDepartments, hasPermission]);
+
   const loadUsersTab = useCallback(async () => {
+    if (!canManageUsers) return;
     setUsersLoading(true);
     setRolesLoading(true);
     setUsersError(null);
@@ -413,13 +487,13 @@ export default function SettingsPage() {
       setUsersLoading(false);
       setRolesLoading(false);
     }
-  }, [usersPage, toast]);
+  }, [canManageUsers, usersPage, toast]);
 
   useEffect(() => {
-    if (activeTab === "usuarios") {
+    if (activeTab === "usuarios" && canManageUsers) {
       void loadUsersTab();
     }
-  }, [activeTab, loadUsersTab]);
+  }, [activeTab, canManageUsers, loadUsersTab]);
 
   // Form fields
   const [nombre, setNombre] = useState("");
@@ -463,7 +537,7 @@ export default function SettingsPage() {
       toast({ title: "Campo obligatorio", description: "Selecciona el área para el Jefe de Área.", variant: "destructive" });
       return;
     }
-    const roleRow = systemRoles.find((r) => r.slug === rol);
+    const roleRow = assignableRoles.find((r) => r.slug === rol);
     if (!roleRow) {
       toast({ title: "Rol", description: "Selecciona un rol válido.", variant: "destructive" });
       return;
@@ -565,6 +639,8 @@ export default function SettingsPage() {
         description:
           rows.length === 1 ? "Se aplicó el cambio en el campo editado." : `Se aplicaron ${rows.length} cambios.`,
       });
+      legalDraftsSnapshotRef.current = null;
+      setLegalEditing(false);
       await loadLegalParams();
     } catch (e) {
       if (e instanceof ApiHttpError && e.status === 403) {
@@ -578,9 +654,146 @@ export default function SettingsPage() {
     }
   }, [hasPermission, legalParams, legalDrafts, legalAt, toast, loadLegalParams]);
 
+  const handleSaveCompanyProfile = useCallback(async () => {
+    if (!hasPermission("settings.params")) return;
+    const normalizedRuc = companyRuc.trim();
+    if (normalizedRuc !== "" && !/^\d{11}$/.test(normalizedRuc)) {
+      toast({
+        title: "RUC inválido",
+        description: "El RUC debe tener exactamente 11 dígitos.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setCompanySaving(true);
+    try {
+      await patchCompanyProfile({
+        legal_name: companyLegalName.trim() || null,
+        ruc: normalizedRuc || null,
+        industry: companyIndustry.trim() || null,
+        fiscal_address: companyFiscalAddress.trim() || null,
+        labor_center: companyLaborCenter.trim() || null,
+        employer_signer_name: companyEmployerSignerName.trim() || null,
+      });
+      if (companyEmployerSignatureFile) {
+        await uploadCompanyEmployerSignature(companyEmployerSignatureFile);
+      } else if (companyEmployerSignatureMarkedForRemoval) {
+        await deleteCompanyEmployerSignature();
+      }
+      toast({
+        title: "Empresa actualizada",
+        description: "Los datos que alimentan la boleta fueron guardados.",
+      });
+      companySnapshotRef.current = null;
+      setCompanyEditing(false);
+      await loadCompanyProfile();
+    } catch (e) {
+      const msg = e instanceof ApiHttpError ? formatApiValidationMessage(e) : "No se pudo guardar el perfil de empresa";
+      toast({ title: "Error al guardar", description: msg, variant: "destructive" });
+    } finally {
+      setCompanySaving(false);
+    }
+  }, [
+    hasPermission,
+    companyRuc,
+    companyLegalName,
+    companyIndustry,
+    companyFiscalAddress,
+    companyLaborCenter,
+    companyEmployerSignerName,
+    companyEmployerSignatureFile,
+    companyEmployerSignatureMarkedForRemoval,
+    toast,
+    loadCompanyProfile,
+  ]);
+
+  const startCompanyEdit = useCallback(() => {
+    companySnapshotRef.current = {
+      legalName: companyLegalName,
+      ruc: companyRuc,
+      industry: companyIndustry,
+      fiscalAddress: companyFiscalAddress,
+      laborCenter: companyLaborCenter,
+      employerSignerName: companyEmployerSignerName,
+      employerSignaturePreview: companyEmployerSignaturePreview,
+      hasEmployerSignatureFile: companyHasEmployerSignatureFile,
+    };
+    setCompanyEmployerSignatureMarkedForRemoval(false);
+    setCompanyEditing(true);
+  }, [
+    companyLegalName,
+    companyRuc,
+    companyIndustry,
+    companyFiscalAddress,
+    companyLaborCenter,
+    companyEmployerSignerName,
+    companyEmployerSignaturePreview,
+    companyHasEmployerSignatureFile,
+  ]);
+
+  const cancelCompanyEdit = useCallback(() => {
+    const snapshot = companySnapshotRef.current;
+    if (snapshot) {
+      setCompanyLegalName(snapshot.legalName);
+      setCompanyRuc(snapshot.ruc);
+      setCompanyIndustry(snapshot.industry);
+      setCompanyFiscalAddress(snapshot.fiscalAddress);
+      setCompanyLaborCenter(snapshot.laborCenter);
+      setCompanyEmployerSignerName(snapshot.employerSignerName);
+      setCompanySignaturePreview(snapshot.employerSignaturePreview);
+      setCompanyHasEmployerSignatureFile(snapshot.hasEmployerSignatureFile);
+      setCompanyEmployerSignatureFile(null);
+      setCompanyEmployerSignatureMarkedForRemoval(false);
+    }
+    companySnapshotRef.current = null;
+    setCompanyEditing(false);
+  }, [setCompanySignaturePreview]);
+
+  const startLegalEdit = useCallback(() => {
+    legalDraftsSnapshotRef.current = { ...legalDrafts };
+    setLegalEditing(true);
+  }, [legalDrafts]);
+
+  const cancelLegalEdit = useCallback(() => {
+    const snapshot = legalDraftsSnapshotRef.current;
+    if (snapshot) {
+      setLegalDrafts({ ...snapshot });
+    }
+    legalDraftsSnapshotRef.current = null;
+    setLegalValidationErrorKey(null);
+    setLegalEditing(false);
+  }, []);
+
+  const handleCompanySignatureChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0] ?? null;
+      event.target.value = "";
+      if (!file) {
+        return;
+      }
+      setCompanyEmployerSignatureFile(file);
+      setCompanyEmployerSignatureMarkedForRemoval(false);
+      setCompanyHasEmployerSignatureFile(true);
+      setCompanySignaturePreview(URL.createObjectURL(file));
+    },
+    [setCompanySignaturePreview],
+  );
+
+  const clearCompanySignatureSelection = useCallback(() => {
+    const hadStoredSignature = Boolean(companySnapshotRef.current?.hasEmployerSignatureFile);
+    setCompanyEmployerSignatureFile(null);
+    setCompanyEmployerSignatureMarkedForRemoval(hadStoredSignature);
+    setCompanySignaturePreview(null);
+    setCompanyHasEmployerSignatureFile(false);
+  }, [setCompanySignaturePreview]);
+
   const handleLegalDraftChange = useCallback((key: string, value: string, unit: string) => {
     const next =
-      unit === "pen" || unit === "percent" ? normalizeMoneyDecimalInput(value) : value;
+      unit === "pen"
+        ? normalizeMoneyDecimalInput(value)
+        : unit === "percent"
+          ? normalizeRatioDecimalInput(value)
+          : value;
     setLegalDrafts((prev) => ({ ...prev, [key]: next }));
     setLegalValidationErrorKey((cur) => (cur === key ? null : cur));
   }, []);
@@ -646,7 +859,10 @@ export default function SettingsPage() {
       setLegalVigenciaOpen(false);
       setLegalVigenciaParam(null);
       setLegalVigenciaStep(0);
-      await loadLegalParams();
+      const drafts = await loadLegalParams();
+      if (legalEditing && drafts) {
+        legalDraftsSnapshotRef.current = { ...drafts };
+      }
     } catch (e) {
       const msg = e instanceof ApiHttpError ? formatApiValidationMessage(e) : "No se pudo registrar la vigencia";
       toast({ title: "Error", description: msg, variant: "destructive" });
@@ -660,91 +876,8 @@ export default function SettingsPage() {
     legalVigenciaSource,
     toast,
     loadLegalParams,
+    legalEditing,
   ]);
-
-  const handleSaveSmtp = async () => {
-    if (!hasPermission("settings.smtp")) return;
-    let port: number | null = null;
-    if (smtpPort.trim() !== "") {
-      const n = Number.parseInt(smtpPort.trim(), 10);
-      if (Number.isNaN(n) || n < 1 || n > 65535) {
-        toast({
-          title: "Puerto no válido",
-          description: "Indica un puerto entre 1 y 65535 o déjalo vacío.",
-          variant: "destructive",
-        });
-        return;
-      }
-      port = n;
-    }
-    const body: components["schemas"]["MailSettingsWrite"] = {
-      enabled: smtpEnabled,
-      host: smtpHost.trim() || null,
-      port,
-      encryption: smtpEncryption === "none" ? null : smtpEncryption,
-      username: smtpUsername.trim() || null,
-      from_address: smtpFromAddress.trim() || null,
-      from_name: smtpFromName.trim() || null,
-    };
-    const pw = smtpPassword.trim();
-    if (pw !== "") {
-      body.password = pw;
-    }
-    setSmtpSaving(true);
-    try {
-      const r = await updateMailSettings(body);
-      applyMailSettingsToForm(r.data);
-      toast({ title: "Configuración guardada", description: "Los ajustes SMTP se actualizaron correctamente." });
-    } catch (e) {
-      if (e instanceof ApiHttpError && e.status === 403) {
-        setSmtpForbidden(true);
-        toast({
-          title: "Sin permiso",
-          description: "No puedes guardar la configuración SMTP.",
-          variant: "destructive",
-        });
-      } else {
-        const msg =
-          e instanceof ApiHttpError ? formatApiValidationMessage(e) : "No se pudieron guardar los cambios";
-        toast({ title: "Error al guardar", description: msg, variant: "destructive" });
-      }
-    } finally {
-      setSmtpSaving(false);
-    }
-  };
-
-  const handleSendSmtpTest = async () => {
-    if (!hasPermission("settings.smtp")) return;
-    const to = smtpTestTo.trim();
-    if (!to) {
-      toast({
-        title: "Correo de prueba",
-        description: "Indica la dirección de correo destino.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setSmtpTesting(true);
-    try {
-      await sendMailTest(to);
-      toast({ title: "Correo enviado", description: `Se envió un mensaje de prueba a ${to}.` });
-    } catch (e) {
-      if (e instanceof ApiHttpError && e.status === 403) {
-        setSmtpForbidden(true);
-        toast({
-          title: "Sin permiso",
-          description: "No puedes enviar correos de prueba.",
-          variant: "destructive",
-        });
-      } else {
-        const msg =
-          e instanceof ApiHttpError ? formatApiValidationMessage(e) : "No se pudo enviar el correo de prueba";
-        toast({ title: "Error en prueba SMTP", description: msg, variant: "destructive" });
-      }
-    } finally {
-      setSmtpTesting(false);
-    }
-  };
 
   const openDeptCreate = () => {
     setDeptEditing(null);
@@ -848,16 +981,19 @@ export default function SettingsPage() {
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold">Configuración</h1>
-        <p className="text-muted-foreground text-sm mt-1">Administración del sistema — Solo Superadmin RRHH</p>
+        <p className="text-muted-foreground text-sm mt-1">Administración del sistema</p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="bg-card border border-border">
-          <TabsTrigger value="usuarios" className="gap-1.5"><Users className="w-4 h-4" />Usuarios</TabsTrigger>
+          {canManageUsers ? (
+            <TabsTrigger value="usuarios" className="gap-1.5"><Users className="w-4 h-4" />Usuarios</TabsTrigger>
+          ) : null}
           <TabsTrigger value="areas" className="gap-1.5"><Building2 className="w-4 h-4" />Áreas</TabsTrigger>
-          <TabsTrigger value="smtp" className="gap-1.5"><Mail className="w-4 h-4" />SMTP</TabsTrigger>
           <TabsTrigger value="parametros" className="gap-1.5"><Shield className="w-4 h-4" />Parámetros</TabsTrigger>
-          <TabsTrigger value="auditoria" className="gap-1.5"><FileText className="w-4 h-4" />Auditoría</TabsTrigger>
+          {canAuditTab ? (
+            <TabsTrigger value="auditoria" className="gap-1.5"><FileText className="w-4 h-4" />Auditoría</TabsTrigger>
+          ) : null}
           {canBackupTab ? (
             <TabsTrigger value="backup" className="gap-1.5"><Database className="w-4 h-4" />Backup</TabsTrigger>
           ) : null}
@@ -873,13 +1009,14 @@ export default function SettingsPage() {
                   variant="outline"
                   type="button"
                   onClick={() => void loadUsersTab()}
-                  disabled={usersLoading}
+                  disabled={usersLoading || !canManageUsers}
                 >
                   Actualizar
                 </Button>
                 <Button
                   size="sm"
                   type="button"
+                  disabled={!canManageUsers}
                   onClick={() => {
                     setEditingUser(null);
                     setInviteCreated(null);
@@ -891,7 +1028,11 @@ export default function SettingsPage() {
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              {usersLoading ? (
+              {!canManageUsers ? (
+                <p className="text-sm text-muted-foreground px-5 py-8">
+                  No tienes permiso para gestionar usuarios.
+                </p>
+              ) : usersLoading ? (
                 <p className="text-sm text-muted-foreground px-5 py-8">Cargando…</p>
               ) : usersError ? (
                 <div className="px-5 py-8 space-y-3">
@@ -940,6 +1081,14 @@ export default function SettingsPage() {
                                 className="text-xs text-primary"
                                 type="button"
                                 onClick={() => {
+                                  if (!canAssignSuperadmin && (u.role ?? "") === "superadmin_rrhh") {
+                                    toast({
+                                      title: "Sin permiso",
+                                      description: "No puedes editar usuarios con rol Superadmin RRHH.",
+                                      variant: "destructive",
+                                    });
+                                    return;
+                                  }
                                   setInviteCreated(null);
                                   setEditingUser(u);
                                   setUserFormOpen(true);
@@ -1082,196 +1231,219 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="smtp" className="mt-4">
-          <Card className="shadow-card">
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-              <CardTitle className="text-base">Configuración SMTP</CardTitle>
-              {hasPermission("settings.smtp") ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  type="button"
-                  onClick={() => void loadMailSettings()}
-                  disabled={smtpLoading || smtpSaving || smtpTesting}
-                >
-                  Actualizar
-                </Button>
+        <TabsContent value="parametros" className="mt-4">
+          <Card className="shadow-card mb-4">
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <div className="space-y-1">
+                <CardTitle className="text-base">Datos de Empresa para Boleta</CardTitle>
+                <p className="text-xs text-muted-foreground font-normal">
+                  Estos datos se usan en la boleta PDF y en la vista previa de nómina. Presioná «Editar» para
+                  modificarlos y «Guardar» para confirmar los cambios.
+                </p>
+              </div>
+              {canEditParams ? (
+                <div className="flex items-center gap-2 shrink-0">
+                  {companyEditing ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        disabled={companySaving}
+                        onClick={cancelCompanyEdit}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        disabled={companyLoading || companySaving}
+                        onClick={() => void handleSaveCompanyProfile()}
+                      >
+                        {companySaving ? "Guardando…" : "Guardar"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      type="button"
+                      disabled={companyLoading}
+                      onClick={startCompanyEdit}
+                    >
+                      <Pencil className="w-3.5 h-3.5 mr-1" />
+                      Editar
+                    </Button>
+                  )}
+                </div>
               ) : null}
             </CardHeader>
-            <CardContent className="space-y-4 max-w-lg">
-              {!hasPermission("settings.smtp") ? (
-                <p className="text-sm text-muted-foreground">
-                  No tienes permiso para ver ni editar la configuración SMTP.
-                </p>
-              ) : smtpForbidden ? (
-                <p className="text-sm text-destructive">
-                  No tienes permiso para acceder a la configuración SMTP.
-                </p>
-              ) : smtpLoading ? (
+            <CardContent className="space-y-4 max-w-5xl">
+              {!canEditParams ? (
+                <p className="text-sm text-muted-foreground">No tienes permiso para editar los datos de empresa.</p>
+              ) : companyLoading ? (
                 <p className="text-sm text-muted-foreground">Cargando…</p>
-              ) : smtpError ? (
-                <div className="space-y-3">
-                  <p className="text-sm text-destructive">{smtpError}</p>
-                  <Button size="sm" variant="outline" type="button" onClick={() => void loadMailSettings()}>
-                    Reintentar
-                  </Button>
-                </div>
               ) : (
-                <>
-                  <div className="flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2">
-                    <div className="space-y-0.5">
-                      <Label className="text-sm">Usar SMTP configurado en la aplicación</Label>
-                      <p className="text-xs text-muted-foreground">
-                        Si está desactivado, el envío usa la configuración por defecto del servidor.
-                      </p>
-                    </div>
-                    <Switch checked={smtpEnabled} onCheckedChange={setSmtpEnabled} disabled={smtpSaving} />
-                  </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <Label className="text-sm">Host SMTP</Label>
+                    <Label>Razón social</Label>
                     <Input
-                      value={smtpHost}
-                      onChange={(e) => setSmtpHost(e.target.value)}
-                      disabled={smtpSaving}
-                      autoComplete="off"
+                      value={companyLegalName}
+                      readOnly={!companyEditing}
+                      className={cn(!companyEditing && readOnlyFieldClass)}
+                      onChange={(e) => setCompanyLegalName(e.target.value)}
+                      placeholder="Ej: EnviaMas S.A.C."
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-sm">Puerto</Label>
+                    <Label>Rubro</Label>
                     <Input
-                      value={smtpPort}
-                      onChange={(e) => setSmtpPort(e.target.value)}
-                      disabled={smtpSaving}
+                      value={companyIndustry}
+                      readOnly={!companyEditing}
+                      className={cn(!companyEditing && readOnlyFieldClass)}
+                      onChange={(e) => setCompanyIndustry(e.target.value)}
+                      placeholder="Ej: Logística y transporte"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>RUC</Label>
+                    <Input
+                      value={companyRuc}
+                      maxLength={11}
                       inputMode="numeric"
-                      placeholder="587"
-                      autoComplete="off"
+                      readOnly={!companyEditing}
+                      className={cn(!companyEditing && readOnlyFieldClass)}
+                      onChange={(e) => setCompanyRuc(e.target.value.replace(/\D/g, "").slice(0, 11))}
+                      placeholder="11 dígitos"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Cifrado</Label>
-                    <Select
-                      value={smtpEncryption}
-                      onValueChange={(v) => setSmtpEncryption(v as "none" | "tls" | "ssl")}
-                      disabled={smtpSaving}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Cifrado" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Ninguno</SelectItem>
-                        <SelectItem value="tls">TLS</SelectItem>
-                        <SelectItem value="ssl">SSL</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Usuario</Label>
+                  <div className="space-y-1.5 md:col-span-2">
+                    <Label>Domicilio fiscal</Label>
                     <Input
-                      value={smtpUsername}
-                      onChange={(e) => setSmtpUsername(e.target.value)}
-                      disabled={smtpSaving}
-                      autoComplete="off"
+                      value={companyFiscalAddress}
+                      readOnly={!companyEditing}
+                      className={cn(!companyEditing && readOnlyFieldClass)}
+                      onChange={(e) => setCompanyFiscalAddress(e.target.value)}
+                      placeholder="Ej: Av. Principal 123, Lima"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Contraseña</Label>
+                  <div className="space-y-1.5 md:col-span-2">
+                    <Label>Centro de labores por defecto</Label>
                     <Input
-                      type="password"
-                      value={smtpPassword}
-                      onChange={(e) => setSmtpPassword(e.target.value)}
-                      disabled={smtpSaving}
-                      placeholder={smtpPasswordSet ? "Dejar vacío para no cambiar" : "Opcional"}
-                      autoComplete="new-password"
+                      value={companyLaborCenter}
+                      readOnly={!companyEditing}
+                      className={cn(!companyEditing && readOnlyFieldClass)}
+                      onChange={(e) => setCompanyLaborCenter(e.target.value)}
+                      placeholder="Ej: Sede Lima"
                     />
-                    {smtpPasswordSet ? (
-                      <p className="text-xs text-muted-foreground">
-                        Hay una contraseña guardada. Déjala en blanco para conservarla.
-                      </p>
-                    ) : null}
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Correo remitente</Label>
+                  <div className="space-y-1.5 md:col-span-2">
+                    <Label>Nombre firmante del empleador</Label>
                     <Input
-                      type="email"
-                      value={smtpFromAddress}
-                      onChange={(e) => setSmtpFromAddress(e.target.value)}
-                      disabled={smtpSaving}
-                      autoComplete="off"
+                      value={companyEmployerSignerName}
+                      readOnly={!companyEditing}
+                      className={cn(!companyEditing && readOnlyFieldClass)}
+                      onChange={(e) => setCompanyEmployerSignerName(e.target.value)}
+                      placeholder="Ej: Carlos Medina"
                     />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Nombre remitente</Label>
-                    <Input
-                      value={smtpFromName}
-                      onChange={(e) => setSmtpFromName(e.target.value)}
-                      disabled={smtpSaving}
-                      autoComplete="off"
-                    />
+                  <div className="space-y-1.5 md:col-span-2">
+                    <Label>Firma del empleador (imagen)</Label>
+                    <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+                      <div className="h-14 flex items-end justify-center rounded-md bg-muted/40 overflow-hidden">
+                        {companyEmployerSignaturePreview ? (
+                          <img
+                            src={companyEmployerSignaturePreview}
+                            alt="Firma del empleador"
+                            className="max-h-12 max-w-full object-contain"
+                          />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {companyHasEmployerSignatureFile ? "Firma cargada" : "Sin firma cargada"}
+                          </span>
+                        )}
+                      </div>
+                      {companyEditing ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            ref={companySignatureInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={handleCompanySignatureChange}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => companySignatureInputRef.current?.click()}
+                          >
+                            {companyEmployerSignaturePreview ? "Cambiar firma" : "Subir firma"}
+                          </Button>
+                          {companyEmployerSignaturePreview ? (
+                            <Button type="button" size="sm" variant="ghost" onClick={clearCompanySignatureSelection}>
+                              Quitar
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Habilita edición para cambiar la firma.</p>
+                      )}
+                    </div>
                   </div>
-                  <Button size="sm" type="button" disabled={smtpSaving || smtpTesting} onClick={() => void handleSaveSmtp()}>
-                    {smtpSaving ? "Guardando…" : "Guardar configuración"}
-                  </Button>
-                  <Separator />
-                  <div className="space-y-1.5">
-                    <Label className="text-sm">Enviar correo de prueba</Label>
-                    <Input
-                      type="email"
-                      value={smtpTestTo}
-                      onChange={(e) => setSmtpTestTo(e.target.value)}
-                      disabled={smtpSaving || smtpTesting}
-                      placeholder="destino@ejemplo.com"
-                      autoComplete="off"
-                    />
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    type="button"
-                    disabled={smtpSaving || smtpTesting}
-                    onClick={() => void handleSendSmtpTest()}
-                  >
-                    {smtpTesting ? "Enviando…" : "Enviar prueba"}
-                  </Button>
-                </>
+                </div>
               )}
             </CardContent>
           </Card>
-        </TabsContent>
-
-        <TabsContent value="parametros" className="mt-4">
           <Card className="shadow-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <div className="space-y-1">
                 <CardTitle className="text-base">Parámetros Legales</CardTitle>
                 <p className="text-xs text-muted-foreground font-normal leading-relaxed max-w-md">
-                  Los valores se editan como borrador hasta que presionás «Guardar parámetros». Para registrar una nueva
-                  vigencia con fecha y fuente normativa usá «Nueva vigencia» en cada parámetro.
+                  Presioná «Editar» para modificar los valores vigentes. Confirmá con «Guardar» o descartá con
+                  «Cancelar». Para registrar una nueva vigencia con fecha y fuente normativa usá «Nueva vigencia» en
+                  cada parámetro mientras estés editando.
                 </p>
               </div>
-              {hasPermission("settings.params") ? (
+              {canEditParams && !legalForbidden ? (
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  <Button
-                    size="sm"
-                    type="button"
-                    onClick={() => void handleSaveLegalParams()}
-                    disabled={!legalHasPendingEdits || legalSaving || legalLoading}
-                  >
-                    {legalSaving ? "Guardando…" : "Guardar parámetros"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    type="button"
-                    onClick={() => void loadLegalParams()}
-                    disabled={legalLoading || legalSaving}
-                  >
-                    Actualizar
-                  </Button>
+                  {legalEditing ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        disabled={legalSaving}
+                        onClick={cancelLegalEdit}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        onClick={() => void handleSaveLegalParams()}
+                        disabled={!legalHasPendingEdits || legalSaving || legalLoading}
+                      >
+                        {legalSaving ? "Guardando…" : "Guardar"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      type="button"
+                      disabled={legalLoading}
+                      onClick={startLegalEdit}
+                    >
+                      <Pencil className="w-3.5 h-3.5 mr-1" />
+                      Editar
+                    </Button>
+                  )}
                 </div>
               ) : null}
             </CardHeader>
             <CardContent className="space-y-4 max-w-5xl">
-              {!hasPermission("settings.params") ? (
+              {!canEditParams ? (
                 <p className="text-sm text-muted-foreground">
                   No tienes permiso para ver ni editar los parámetros legales.
                 </p>
@@ -1312,23 +1484,29 @@ export default function SettingsPage() {
                       ) : null}
                       <Input
                         value={draftVal}
+                        readOnly={!legalEditing}
+                        className={cn(!legalEditing && readOnlyFieldClass)}
                         onChange={(e) => handleLegalDraftChange(p.key, e.target.value, p.unit)}
                         placeholder={p.unit === "pen" ? "0.00" : "0.00–1"}
                         inputMode="decimal"
                         disabled={legalSaving}
                       />
                       {p.unit === "percent" ? (
-                        <p className="text-xs text-muted-foreground">Ratio entre 0 y 1 (ej. 0.10 = 10%).</p>
-                      ) : null}
-                      {legalValidationErrorKey === p.key ? (
-                        <p className="text-xs text-destructive">
-                          Valor no válido. Tasas: ratio 0–1; montos en soles &gt; 0.
+                        <p className="text-xs text-muted-foreground">
+                          Ratio entre 0 y 1 (ej. 0.10 = 10%). Hasta 8 decimales si necesitas más precisión.
                         </p>
-                      ) : rowDirty ? (
-                        <p className="text-xs text-muted-foreground">Cambios pendientes</p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">Guardado</p>
-                      )}
+                      ) : null}
+                      {legalEditing ? (
+                        legalValidationErrorKey === p.key ? (
+                          <p className="text-xs text-destructive">
+                            Valor no válido. Tasas: ratio 0–1; montos en soles &gt; 0.
+                          </p>
+                        ) : rowDirty ? (
+                          <p className="text-xs text-muted-foreground">Cambios pendientes</p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">Sin cambios</p>
+                        )
+                      ) : null}
                       <div className="flex justify-end pt-0.5">
                         <Button
                           type="button"
@@ -1336,7 +1514,7 @@ export default function SettingsPage() {
                           size="sm"
                           className="text-xs h-8"
                           onClick={() => openLegalVigenciaDialog(p)}
-                          disabled={legalSaving}
+                          disabled={!legalEditing || legalSaving}
                         >
                           Nueva vigencia
                         </Button>
@@ -1515,7 +1693,7 @@ export default function SettingsPage() {
                 }}
                 readOnly={!!editingUser}
                 tabIndex={editingUser ? -1 : undefined}
-                placeholder="usuario@enviam.as"
+                placeholder="usuario@enviamas.pe"
                 className={editingUser ? "bg-muted cursor-not-allowed" : undefined}
                 disabled={userFormSubmitting}
               />
@@ -1531,20 +1709,20 @@ export default function SettingsPage() {
                   setRol(v);
                   if (v !== "jefe_area") setDepartmentId("");
                 }}
-                disabled={rolesLoading || systemRoles.length === 0 || userFormSubmitting}
+                disabled={rolesLoading || assignableRoles.length === 0 || userFormSubmitting}
               >
                 <SelectTrigger>
                   <SelectValue placeholder={rolesLoading ? "Cargando roles…" : "Seleccionar rol"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {systemRoles.map((r) => (
+                  {assignableRoles.map((r) => (
                     <SelectItem key={r.id} value={r.slug}>
                       {roleLabel(r.slug, r.name)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {!rolesLoading && systemRoles.length === 0 ? (
+              {!rolesLoading && assignableRoles.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No hay roles en el servidor. Ejecuta el seed RBAC o revisa permisos.</p>
               ) : null}
             </div>
@@ -1631,8 +1809,8 @@ export default function SettingsPage() {
                 <span className="text-foreground font-medium tabular-nums">
                   {legalVigenciaParam.value != null && legalVigenciaParam.value !== ""
                     ? legalVigenciaParam.unit === "pen"
-                      ? `S/ ${Number.parseFloat(legalVigenciaParam.value).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                      : legalVigenciaParam.value
+                      ? `S/ ${Number.parseFloat(formatDecimalDisplay(legalVigenciaParam.value)).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                      : formatDecimalDisplay(legalVigenciaParam.value)
                     : "—"}
                 </span>
                 {legalVigenciaParam.latest_effective_from ? (
@@ -1649,9 +1827,11 @@ export default function SettingsPage() {
                       value={legalVigenciaNewValue}
                       onChange={(e) =>
                         setLegalVigenciaNewValue(
-                          legalVigenciaParam.unit === "pen" || legalVigenciaParam.unit === "percent"
+                          legalVigenciaParam.unit === "pen"
                             ? normalizeMoneyDecimalInput(e.target.value)
-                            : e.target.value,
+                            : legalVigenciaParam.unit === "percent"
+                              ? normalizeRatioDecimalInput(e.target.value)
+                              : e.target.value,
                         )
                       }
                       placeholder={legalVigenciaParam.unit === "pen" ? "0.00" : "0.00–1"}
@@ -1693,8 +1873,8 @@ export default function SettingsPage() {
                       <dd className="font-medium tabular-nums text-right">
                         {legalVigenciaParam.value != null && legalVigenciaParam.value !== ""
                           ? legalVigenciaParam.unit === "pen"
-                            ? `S/ ${Number.parseFloat(legalVigenciaParam.value).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                            : legalVigenciaParam.value
+                            ? `S/ ${Number.parseFloat(formatDecimalDisplay(legalVigenciaParam.value)).toLocaleString("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                            : formatDecimalDisplay(legalVigenciaParam.value)
                           : "—"}
                       </dd>
                     </div>
@@ -1785,7 +1965,7 @@ export default function SettingsPage() {
               <Label className="text-sm">Puestos del área</Label>
               <p className="text-xs text-muted-foreground">
                 Opcional. Cargos habituales de esta área; puedes añadir varios (máx. 50). No podrás quitar un puesto si
-                algún empleado del área tiene ese cargo en su ficha (campo Puesto).
+                algún colaborador del área tiene ese cargo en su ficha (campo Puesto).
               </p>
               <div className="space-y-2">
                 {deptPositionsDraft.map(row => (
@@ -1863,7 +2043,7 @@ export default function SettingsPage() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">
             {deptPendingDelete
-              ? `¿Eliminar el área «${deptPendingDelete.name}»? Esta acción no se puede deshacer. Si hay empleados o usuarios vinculados, el sistema no permitirá el borrado.`
+              ? `¿Eliminar el área «${deptPendingDelete.name}»? Esta acción no se puede deshacer. Si hay colaboradores o usuarios vinculados, el sistema no permitirá el borrado.`
               : null}
           </p>
           <DialogFooter>

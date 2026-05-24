@@ -3,6 +3,7 @@ import { AGGREGATION_PAGE_SIZE } from "@/constants/pagination";
 import { apiRequest, ApiHttpError, buildApiUrl } from "@/api/client";
 import { getAuthToken } from "@/api/authToken";
 import { downloadReportPdf, downloadReportXlsx, downloadReportZip } from "@/api/reportExports";
+import type { PayslipSunatDisplay } from "@/lib/payslipSunatDisplay";
 
 export type PayrollPeriod = components["schemas"]["PayrollPeriod"];
 export type Payslip = components["schemas"]["Payslip"];
@@ -115,8 +116,17 @@ export async function deletePayslip(id: number): Promise<void> {
   await apiRequest<void>(`/payslips/${id}`, { method: "DELETE" });
 }
 
-export async function approvePayslip(id: number) {
+export type PayslipApproveBody = components["schemas"]["PayslipApproveWrite"];
+
+export async function approvePayslip(id: number, body?: PayslipApproveBody) {
   return apiRequest<components["schemas"]["PayslipEnvelope"]>(`/payslips/${id}/approve`, {
+    method: "POST",
+    body,
+  });
+}
+
+export async function revertPayslipApproval(id: number) {
+  return apiRequest<components["schemas"]["PayslipEnvelope"]>(`/payslips/${id}/revert-approval`, {
     method: "POST",
   });
 }
@@ -170,6 +180,14 @@ export async function downloadPayrollPayslipsZip(payrollPeriodId: number, areaFi
 
 export async function downloadPayslipPdf(id: number): Promise<void> {
   await downloadReportPdf(`payslips/${id}/pdf`);
+}
+
+export type PayslipSunatDisplayEnvelope = {
+  data: PayslipSunatDisplay;
+};
+
+export async function fetchPayslipSunatDisplay(id: number) {
+  return apiRequest<PayslipSunatDisplayEnvelope>(`/payslips/${id}/sunat-display`);
 }
 
 export type AttendanceDeductionPreviewBody = components["schemas"]["AttendanceDeductionPreviewWrite"];

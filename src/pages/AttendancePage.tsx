@@ -19,17 +19,21 @@ import { formatAppDate } from "@/lib/formatAppDate";
 import { formatEmployeeName } from "@/lib/employeeName";
 import { cn } from "@/lib/utils";
 import { formatDecimalHoursAsDuration } from "@/lib/formatWorkedDuration";
-import {
-  attendanceTimeToApiNullable,
-  attendanceTimeToMinutes,
-  classifyAttendanceTimeInput,
-} from "@/lib/attendanceTimeInput";
+import { attendanceTimeToApiNullable } from "@/lib/attendanceTimeInput";
+import { ALL_ATTENDANCE_STATUSES, deriveAttendanceFormState } from "@/lib/attendanceFormState";
+import { resolveEmployeeExpectedSchedule } from "@/lib/employeeExpectedSchedule";
 import {
   filterWeekdayAttendanceRecords,
   isWeekendIso,
   isWeekendYmd,
   recordDateToIsoDay,
 } from "@/lib/weekendAttendance";
+import {
+  applyApprovedVacationsToStatusMap,
+  buildMonthCalendarDays,
+  buildStatusMapFromRecords,
+  monthDayCount,
+} from "@/lib/attendanceCalendarVacations";
 import { ApiHttpError } from "@/api/client";
 import { downloadReportCsv, downloadReportPdf, downloadReportXlsx } from "@/api/reportExports";
 import { ListPaginationBar } from "@/components/ListPaginationBar";
@@ -71,10 +75,6 @@ const meses = [
 
 const years = Array.from({ length: 11 }, (_, i) => 2020 + i);
 
-function monthDayCount(year: number, month: number): number {
-  return new Date(year, month + 1, 0).getDate();
-}
-
 function buildNeutralMonthDays(year: number, month: number): { day: number; status: string }[] {
   const n = monthDayCount(year, month);
   return Array.from({ length: n }, (_, i) => ({ day: i + 1, status: "__none__" }));
@@ -102,176 +102,9 @@ function labelAttendanceStatus(s: string): string {
   return ATTENDANCE_STATUS_OPTIONS.find((o) => o.value === s)?.label ?? s;
 }
 
-const DEFAULT_ATT_CHECK_IN = "09:00";
-const DEFAULT_ATT_CHECK_OUT = "18:45";
-
 function toTimeInputValue(v: string | null | undefined): string {
   if (!v) return "";
   return v.length >= 5 ? v.slice(0, 5) : v;
-}
-
-const ALL_ATTENDANCE_STATUSES: AttendanceStatus[] = [
-  "asistido",
-  "recuperacion",
-  "tardanza_j",
-  "tardanza_nj",
-  "falta_j",
-  "falta_nj",
-  "vacaciones",
-];
-
-type AttendanceFormUi = {
-  suggestedStatus: AttendanceStatus;
-  statusDisabled: boolean;
-  allowedStatuses: AttendanceStatus[];
-  justificationDisabled: boolean;
-  fileDisabled: boolean;
-  partialTimeInvalid: boolean;
-};
-
-function deriveAttendanceFormState(checkIn: string, checkOut: string, status: AttendanceStatus): AttendanceFormUi {
-  const inRaw = checkIn.trim();
-  const outRaw = checkOut.trim();
-  const inKind = classifyAttendanceTimeInput(checkIn);
-  const outKind = classifyAttendanceTimeInput(checkOut);
-
-  if (inKind === "invalid_partial" || outKind === "invalid_partial") {
-    const allowed = ALL_ATTENDANCE_STATUSES.includes(status) ? [status] : ["falta_nj"];
-    return {
-      suggestedStatus: status,
-      statusDisabled: true,
-      allowedStatuses: allowed,
-      justificationDisabled: true,
-      fileDisabled: true,
-      partialTimeInvalid: true,
-    };
-  }
-
-  if (inKind === "empty_complete" && outKind === "empty_complete") {
-    return {
-      suggestedStatus: "falta_nj",
-      statusDisabled: false,
-      allowedStatuses: ["falta_nj", "falta_j", "vacaciones"],
-      justificationDisabled: status !== "falta_j",
-      fileDisabled: status !== "falta_j",
-      partialTimeInvalid: false,
-    };
-  }
-
-  if (inKind !== "valid" || outKind !== "valid") {
-    const allowed = ALL_ATTENDANCE_STATUSES.includes(status) ? [status] : ["falta_nj"];
-    return {
-      suggestedStatus: status,
-      statusDisabled: true,
-      allowedStatuses: allowed,
-      justificationDisabled: true,
-      fileDisabled: true,
-      partialTimeInvalid: true,
-    };
-  }
-
-  const inM = attendanceTimeToMinutes(inRaw);
-  const outM = attendanceTimeToMinutes(outRaw);
-  if (inM === null || outM === null) {
-    const allowed = ALL_ATTENDANCE_STATUSES.includes(status) ? [status] : ["falta_nj"];
-    return {
-      suggestedStatus: status,
-      statusDisabled: true,
-      allowedStatuses: allowed,
-      justificationDisabled: true,
-      fileDisabled: true,
-      partialTimeInvalid: true,
-    };
-  }
-
-  const m0900 = attendanceTimeToMinutes(DEFAULT_ATT_CHECK_IN);
-  const m1845 = attendanceTimeToMinutes(DEFAULT_ATT_CHECK_OUT);
-  const m1800 = attendanceTimeToMinutes("18:00");
-  if (m0900 === null || m1845 === null || m1800 === null) {
-    return {
-      suggestedStatus: "asistido",
-      statusDisabled: false,
-      allowedStatuses: ALL_ATTENDANCE_STATUSES,
-      justificationDisabled: false,
-      fileDisabled: false,
-      partialTimeInvalid: false,
-    };
-  }
-
-  if (inM === m0900 && outM === m1845) {
-    return {
-      suggestedStatus: "asistido",
-      statusDisabled: true,
-      allowedStatuses: ["asistido"],
-      justificationDisabled: true,
-      fileDisabled: true,
-      partialTimeInvalid: false,
-    };
-  }
-
-  if (outM! > m1845) {
-    return {
-      suggestedStatus: "recuperacion",
-      statusDisabled: true,
-      allowedStatuses: ["recuperacion"],
-      justificationDisabled: true,
-      fileDisabled: true,
-      partialTimeInvalid: false,
-    };
-  }
-
-  if (inM === m0900 && outM === m1800) {
-    return {
-      suggestedStatus: "tardanza_j",
-      statusDisabled: true,
-      allowedStatuses: ["tardanza_j"],
-      justificationDisabled: true,
-      fileDisabled: true,
-      partialTimeInvalid: false,
-    };
-  }
-
-  if (inM! > m0900 && outM === m1800) {
-    return {
-      suggestedStatus: "tardanza_j",
-      statusDisabled: true,
-      allowedStatuses: ["tardanza_j"],
-      justificationDisabled: true,
-      fileDisabled: true,
-      partialTimeInvalid: false,
-    };
-  }
-
-  if (inM! > m0900 && outM === m1845) {
-    return {
-      suggestedStatus: "tardanza_nj",
-      statusDisabled: false,
-      allowedStatuses: ["tardanza_nj", "tardanza_j"],
-      justificationDisabled: status !== "tardanza_j",
-      fileDisabled: status !== "tardanza_j",
-      partialTimeInvalid: false,
-    };
-  }
-
-  if (outM! < m1845) {
-    return {
-      suggestedStatus: "tardanza_nj",
-      statusDisabled: false,
-      allowedStatuses: ["tardanza_nj", "tardanza_j"],
-      justificationDisabled: status !== "tardanza_j",
-      fileDisabled: status !== "tardanza_j",
-      partialTimeInvalid: false,
-    };
-  }
-
-  return {
-    suggestedStatus: "asistido",
-    statusDisabled: false,
-    allowedStatuses: ALL_ATTENDANCE_STATUSES,
-    justificationDisabled: false,
-    fileDisabled: false,
-    partialTimeInvalid: false,
-  };
 }
 
 function displayVacationRange(start: string, end: string): string {
@@ -283,6 +116,26 @@ function displayVacationRange(start: string, end: string): string {
 
 function formatAttendanceDateLabel(iso: string): string {
   return formatAppDate(iso);
+}
+
+async function fetchAllApprovedVacationsByEmployee(employeeId: number): Promise<VacationRequest[]> {
+  const perPage = 100;
+  let page = 1;
+  let lastPage = 1;
+  const rows: VacationRequest[] = [];
+  do {
+    const res = await fetchVacationRequestsPage({
+      employee_id: employeeId,
+      status: "aprobado",
+      per_page: perPage,
+      page,
+    });
+    rows.push(...res.data);
+    lastPage = Math.max(1, res.meta.last_page ?? 1);
+    page += 1;
+  } while (page <= lastPage);
+
+  return rows;
 }
 
 type AttendanceMainTab = "calendario" | "vacaciones";
@@ -347,7 +200,9 @@ export default function AttendancePage() {
   const [vacationRequests, setVacationRequests] = useState<VacationRequest[]>([]);
   const [vacationLoading, setVacationLoading] = useState(true);
   const [vacationError, setVacationError] = useState<string | null>(null);
-  const [vacationEmployees, setVacationEmployees] = useState<{ id: number; displayName: string }[]>([]);
+  const [vacationEmployees, setVacationEmployees] = useState<
+    { id: number; displayName: string; modality: string | null }[]
+  >([]);
   const [vacationPage, setVacationPage] = useState(1);
   const [vacationMeta, setVacationMeta] = useState({
     current_page: 1,
@@ -427,7 +282,13 @@ export default function AttendancePage() {
       try {
         const all = await fetchAllEmployees();
         if (cancelled) return;
-        setVacationEmployees(all.map((e) => ({ id: e.id, displayName: formatEmployeeName(e) })));
+        setVacationEmployees(
+          all.map((e) => ({
+            id: e.id,
+            displayName: formatEmployeeName(e),
+            modality: e.modality ?? null,
+          })),
+        );
       } catch {
         if (!cancelled) setVacationEmployees([]);
       }
@@ -495,26 +356,19 @@ export default function AttendancePage() {
     }
 
     try {
-      const records = await fetchAllAttendanceInRange({
-        employee_id: empId,
-        from: first,
-        to: last,
-      });
+      const [records, approvedVacations] = await Promise.all([
+        fetchAllAttendanceInRange({
+          employee_id: empId,
+          from: first,
+          to: last,
+        }),
+        fetchAllApprovedVacationsByEmployee(empId),
+      ]);
       const weekdayRecords = filterWeekdayAttendanceRecords(records);
       setMonthAttendanceRecords(weekdayRecords.slice().sort((a, b) => a.record_date.localeCompare(b.record_date)));
-      const statusByIso = new Map<string, string>();
-      weekdayRecords.forEach((r) => {
-        const d = recordDateToIsoDay(r);
-        statusByIso.set(d, r.status);
-      });
-      const total = monthDayCount(y, m);
-      const days = Array.from({ length: total }, (_, i) => {
-        const day = i + 1;
-        const iso = format(new Date(y, m, day), "yyyy-MM-dd");
-        const statusSt = statusByIso.get(iso) ?? "__none__";
-        return { day, status: statusSt };
-      });
-      setDaysInMonth(days);
+      const statusByIso = buildStatusMapFromRecords(weekdayRecords, recordDateToIsoDay);
+      applyApprovedVacationsToStatusMap(statusByIso, approvedVacations, first, last);
+      setDaysInMonth(buildMonthCalendarDays(y, m, statusByIso));
     } catch (err) {
       const msg =
         err instanceof ApiHttpError ? err.apiError?.message ?? err.message : "No se pudo cargar la asistencia";
@@ -549,6 +403,15 @@ export default function AttendancePage() {
     setAttendanceDateSource("button");
   };
 
+  const attendanceExpectedSchedule = useMemo(() => {
+    if (selectedEmpleado === "all") {
+      return resolveEmployeeExpectedSchedule(null);
+    }
+    const empId = Number(selectedEmpleado);
+    const emp = vacationEmployees.find((e) => e.id === empId);
+    return resolveEmployeeExpectedSchedule(emp?.modality);
+  }, [selectedEmpleado, vacationEmployees]);
+
   const openAttendanceCreate = (initialDateIso?: string) => {
     const y = parseInt(selectedYear, 10);
     const m = parseInt(selectedMonth, 10);
@@ -569,10 +432,11 @@ export default function AttendancePage() {
     setAttendanceMode("create");
     setAttendanceEditingId(null);
     setAttendanceDate(iso);
-    setAttendanceCheckIn(DEFAULT_ATT_CHECK_IN);
-    setAttendanceCheckOut(DEFAULT_ATT_CHECK_OUT);
+    const { checkIn, checkOut } = attendanceExpectedSchedule;
+    setAttendanceCheckIn(checkIn);
+    setAttendanceCheckOut(checkOut);
     setAttendanceStatus(
-      deriveAttendanceFormState(DEFAULT_ATT_CHECK_IN, DEFAULT_ATT_CHECK_OUT, "asistido").suggestedStatus,
+      deriveAttendanceFormState(checkIn, checkOut, "asistido", attendanceExpectedSchedule).suggestedStatus,
     );
     setAttendanceJustification("");
     setAttendanceFile(null);
@@ -584,8 +448,8 @@ export default function AttendancePage() {
     if (selectedEmpleado !== "all" && attendanceLoading) return;
     if (selectedEmpleado === "all") {
       toast({
-        title: "Elige un empleado",
-        description: "Selecciona un empleado en el filtro para registrar o editar asistencia manualmente.",
+        title: "Elige un colaborador",
+        description: "Selecciona un colaborador en el filtro para registrar o editar asistencia manualmente.",
       });
       return;
     }
@@ -625,8 +489,14 @@ export default function AttendancePage() {
   };
 
   const attendanceFormUi = useMemo(
-    () => deriveAttendanceFormState(attendanceCheckIn, attendanceCheckOut, attendanceStatus),
-    [attendanceCheckIn, attendanceCheckOut, attendanceStatus],
+    () =>
+      deriveAttendanceFormState(
+        attendanceCheckIn,
+        attendanceCheckOut,
+        attendanceStatus,
+        attendanceExpectedSchedule,
+      ),
+    [attendanceCheckIn, attendanceCheckOut, attendanceStatus, attendanceExpectedSchedule],
   );
 
   const attendanceDateIsWeekend = useMemo(() => isWeekendIso(attendanceDate), [attendanceDate]);
@@ -636,26 +506,41 @@ export default function AttendancePage() {
   useEffect(() => {
     if (!attendanceDialogOpen) return;
     setAttendanceStatus((prev) => {
-      const ui = deriveAttendanceFormState(attendanceCheckIn, attendanceCheckOut, prev);
+      const ui = deriveAttendanceFormState(
+        attendanceCheckIn,
+        attendanceCheckOut,
+        prev,
+        attendanceExpectedSchedule,
+      );
       if (ui.statusDisabled) return ui.suggestedStatus;
       if (!ui.allowedStatuses.includes(prev)) return ui.suggestedStatus;
       return prev;
     });
-  }, [attendanceCheckIn, attendanceCheckOut, attendanceDialogOpen]);
+  }, [attendanceCheckIn, attendanceCheckOut, attendanceDialogOpen, attendanceExpectedSchedule]);
 
   useEffect(() => {
     if (!attendanceDialogOpen) return;
     setAttendanceJustification((prev) => {
-      const ui = deriveAttendanceFormState(attendanceCheckIn, attendanceCheckOut, attendanceStatus);
+      const ui = deriveAttendanceFormState(
+        attendanceCheckIn,
+        attendanceCheckOut,
+        attendanceStatus,
+        attendanceExpectedSchedule,
+      );
       if (ui.justificationDisabled && prev) return "";
       return prev;
     });
     setAttendanceFile((prev) => {
-      const ui = deriveAttendanceFormState(attendanceCheckIn, attendanceCheckOut, attendanceStatus);
+      const ui = deriveAttendanceFormState(
+        attendanceCheckIn,
+        attendanceCheckOut,
+        attendanceStatus,
+        attendanceExpectedSchedule,
+      );
       if (ui.fileDisabled && prev) return null;
       return prev;
     });
-  }, [attendanceCheckIn, attendanceCheckOut, attendanceStatus, attendanceDialogOpen]);
+  }, [attendanceCheckIn, attendanceCheckOut, attendanceStatus, attendanceDialogOpen, attendanceExpectedSchedule]);
 
   const handleAttendanceCheckInChange = (value: string) => {
     setAttendanceCheckIn(value);
@@ -676,7 +561,12 @@ export default function AttendancePage() {
       return;
     }
     if (
-      deriveAttendanceFormState(attendanceCheckIn, attendanceCheckOut, attendanceStatus).partialTimeInvalid
+      deriveAttendanceFormState(
+        attendanceCheckIn,
+        attendanceCheckOut,
+        attendanceStatus,
+        attendanceExpectedSchedule,
+      ).partialTimeInvalid
     ) {
       toast({
         title: "Horas incompletas",
@@ -751,7 +641,7 @@ export default function AttendancePage() {
     }
     const empId = Number(selEmpleado);
     if (Number.isNaN(empId)) {
-      toast({ title: "Error", description: "Empleado no válido.", variant: "destructive" });
+      toast({ title: "Error", description: "Colaborador no válido.", variant: "destructive" });
       return;
     }
     setCreatingVacation(true);
@@ -762,7 +652,7 @@ export default function AttendancePage() {
         end_date: format(fechaFin, "yyyy-MM-dd"),
         days: diasCalculados,
       });
-      const empNombre = vacationEmployees.find((e) => e.id === empId)?.displayName ?? `Empleado ${empId}`;
+      const empNombre = vacationEmployees.find((e) => e.id === empId)?.displayName ?? `Colaborador ${empId}`;
       toast({ title: "Solicitud enviada", description: `Vacaciones de ${empNombre} registradas como pendiente.` });
       setShowNuevaSolicitud(false);
       setSelEmpleado("");
@@ -787,6 +677,7 @@ export default function AttendancePage() {
         description: `Solicitud marcada como ${vacationStatusLabel[status].toLowerCase()}.`,
       });
       await loadVacationData();
+      await loadCalendarMonth();
       const v = vacationRequests.find((x) => x.id === id);
       if (v && selEmpleado === String(v.employee_id)) {
         try {
@@ -824,11 +715,12 @@ export default function AttendancePage() {
       await patchVacationRequestStatus(row.id, { status: vacationCorrectionStatus });
       toast({
         title: "Estado actualizado",
-        description: "Se aplicó la corrección; el empleado recibirá notificación en el portal (y correo si aplica).",
+        description: "Se aplicó la corrección; el colaborador recibirá notificación en el portal (y correo si aplica).",
       });
       setVacationCorrectionRow(null);
       setVacationCorrectionStatus("");
       await loadVacationData();
+      await loadCalendarMonth();
       if (selEmpleado === String(row.employee_id)) {
         try {
           const y = new Date().getFullYear();
@@ -960,7 +852,7 @@ export default function AttendancePage() {
             disabled={!canExportAttendance || attendanceExportBusy}
             title={
               canExportAttendance
-                ? "Descargar CSV del mes (datos en bruto). Respeta el empleado del filtro; con Todos exporta todo el alcance permitido."
+                ? "Descargar CSV del mes (datos en bruto). Respeta el colaborador del filtro; con Todos exporta todo el alcance permitido."
                 : "Requiere permisos: exportar reportes y ver asistencia."
             }
             onClick={() => void handleExportAttendanceCsv()}
@@ -976,7 +868,7 @@ export default function AttendancePage() {
             disabled={!canExportAttendance || attendanceExportBusy}
             title={
               canExportAttendance
-                ? "Descargar Excel del mes con formato RRHH. Mismo filtro de empleado y rango que el CSV."
+                ? "Descargar Excel del mes con formato RRHH. Mismo filtro de colaborador y rango que el CSV."
                 : "Requiere permisos: exportar reportes y ver asistencia."
             }
             onClick={() => void handleExportAttendanceXlsx()}
@@ -992,7 +884,7 @@ export default function AttendancePage() {
             disabled={!canExportAttendance || attendanceExportBusy}
             title={
               canExportAttendance
-                ? "Descargar PDF del mes (misma tabla que Excel). Respeta el filtro de empleado y el rango del mes."
+                ? "Descargar PDF del mes (misma tabla que Excel). Respeta el filtro de colaborador y el rango del mes."
                 : "Requiere permisos: exportar reportes y ver asistencia."
             }
             onClick={() => void handleExportAttendancePdf()}
@@ -1027,14 +919,14 @@ export default function AttendancePage() {
                       variant="default"
                       type="button"
                       className="shrink-0 font-semibold shadow-sm"
-                      title="Registro manual de asistencia para el empleado seleccionado"
+                      title="Registro manual de asistencia para el colaborador seleccionado"
                       onClick={() => openAttendanceCreate()}
                     >
                       Registrar asistencia
                     </Button>
                   ) : null}
                   <Select value={selectedEmpleado} onValueChange={setSelectedEmpleado}>
-                    <SelectTrigger className="w-44"><SelectValue placeholder="Empleado" /></SelectTrigger>
+                    <SelectTrigger className="w-44"><SelectValue placeholder="Colaborador" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Todos</SelectItem>
                       {vacationEmployees.map((e) => (
@@ -1068,13 +960,13 @@ export default function AttendancePage() {
                 <p className="text-sm text-muted-foreground mb-3">
                   {canManageAttendance ? (
                     <>
-                      Elige un empleado en el filtro para ver el calendario con datos y usar el{" "}
+                      Elige un colaborador en el filtro para ver el calendario con datos y usar el{" "}
                       <span className="font-medium text-foreground">registro manual</span> (botón{" "}
                       <span className="font-medium text-foreground">Registrar asistencia</span>, tabla o clic en un día).
                       Con <span className="font-medium text-foreground">Todos</span> no se puede registrar ni editar.
                     </>
                   ) : (
-                    "Selecciona un empleado para ver los registros de asistencia del mes."
+                    "Selecciona un colaborador para ver los registros de asistencia del mes."
                   )}
                 </p>
               ) : null}
@@ -1139,7 +1031,7 @@ export default function AttendancePage() {
                       disabled={!interactive}
                       title={
                         selectedEmpleado === "all"
-                          ? "Elige un empleado para registrar o editar este día"
+                          ? "Elige un colaborador para registrar o editar este día"
                           : empty
                             ? "Registrar asistencia para este día"
                             : "Editar asistencia de este día"
@@ -1260,7 +1152,7 @@ export default function AttendancePage() {
             <CardContent className="p-0">
               <table className="w-full">
                 <thead><tr className="border-b border-border bg-muted/50">
-                  <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Empleado</th>
+                  <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Colaborador</th>
                   <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Fechas</th>
                   <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Días</th>
                   <th className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">Estado</th>
@@ -1387,9 +1279,9 @@ export default function AttendancePage() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label>Empleado</Label>
+              <Label>Colaborador</Label>
               <Select value={selEmpleado} onValueChange={setSelEmpleado}>
-                <SelectTrigger><SelectValue placeholder="Seleccionar empleado" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="Seleccionar colaborador" /></SelectTrigger>
                 <SelectContent>
                   {vacationEmployees.map((e) => (
                     <SelectItem key={e.id} value={String(e.id)}>
@@ -1407,7 +1299,7 @@ export default function AttendancePage() {
                   <p className="text-destructive">{hrVacBalanceError}</p>
                 ) : hrVacBalance ? (
                   <>
-                    <p className="font-medium text-foreground">Saldo {hrVacBalance.year} (empleado seleccionado)</p>
+                    <p className="font-medium text-foreground">Saldo {hrVacBalance.year} (colaborador seleccionado)</p>
                     <p className="text-muted-foreground">
                       Tope anual: {hrVacBalance.annual_days} · Usados: {hrVacBalance.days_used} · Pendientes:{" "}
                       {hrVacBalance.days_pending} · Disponibles: {hrVacBalance.days_available}
@@ -1467,7 +1359,7 @@ export default function AttendancePage() {
               <Label>Motivo / Observaciones</Label>
               <Textarea placeholder="Escribe el motivo de la solicitud..." value={motivo} onChange={(e) => setMotivo(e.target.value)} />
               <p className="text-xs text-muted-foreground">
-                El backend aún no guarda este texto; solo se registran fechas, días y empleado.
+                El backend aún no guarda este texto; solo se registran fechas, días y colaborador.
               </p>
             </div>
           </div>
@@ -1500,7 +1392,7 @@ export default function AttendancePage() {
               <p className="text-sm text-muted-foreground">
                 Estado actual:{" "}
                 <span className="font-medium text-foreground">{vacationStatusLabel[vacationCorrectionRow.status]}</span>.
-                El empleado será notificado al guardar.
+                El colaborador será notificado al guardar.
               </p>
               <div className="space-y-1.5">
                 <span className="text-sm font-medium">Nuevo estado</span>

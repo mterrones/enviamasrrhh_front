@@ -30,13 +30,14 @@ import {
   patchDeductionInstallmentPlan,
   uploadDeductionPlanEvidence,
   type DeductionInstallmentPlan,
+  type DeductionInstallmentPlanPatchBody,
   type DeductionInstallmentPlanWriteBody,
 } from "@/api/payroll";
-import { formatEmployeeName } from "@/lib/employeeName";
+import { formatEmployeeFullName } from "@/lib/employeeName";
 import { deductionPlanCategoryLabelEs } from "@/lib/payrollDeductionHelpers";
 import { normalizeMoneyDecimalInput } from "@/lib/moneyDecimalInput";
 import { useAuth } from "@/contexts/AuthContext";
-import { Download, FileUp, Loader2, Pencil, Trash2, XCircle } from "lucide-react";
+import { Download, FileUp, Loader2, Pencil, RotateCcw, Trash2, XCircle } from "lucide-react";
 
 const CATEGORY_OPTIONS: { value: NonNullable<DeductionInstallmentPlanWriteBody["category"]>; label: string }[] = [
   { value: "damage_equipment", label: "Daño a equipo" },
@@ -114,6 +115,8 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
   const [editDescription, setEditDescription] = useState("");
   const [editNotes, setEditNotes] = useState("");
   const [editAssetId, setEditAssetId] = useState<string>("");
+  const [editTotal, setEditTotal] = useState("");
+  const [editMonths, setEditMonths] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
   const [evidencePlanId, setEvidencePlanId] = useState<number | null>(null);
@@ -194,7 +197,7 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
 
   const openCreate = () => {
     if (Number.isNaN(selectedEmpId)) {
-      toast({ title: "Empleado requerido", description: "Selecciona un empleado.", variant: "destructive" });
+      toast({ title: "Colaborador requerido", description: "Selecciona un colaborador.", variant: "destructive" });
       return;
     }
     setCreateLabel("");
@@ -244,19 +247,37 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
     setEditDescription(p.description ?? "");
     setEditNotes(p.notes ?? "");
     setEditAssetId(p.asset_id != null ? String(p.asset_id) : "");
+    setEditTotal(p.total_amount);
+    setEditMonths(String(p.installment_count));
   };
 
   const handleEditSave = async () => {
     if (!editTarget || Number.isNaN(selectedEmpId)) return;
+    const canEditInstallmentTerms = editTarget.installments_applied === 0;
+    const total = Number.parseFloat(editTotal.replace(",", ".")) || 0;
+    const months = Number.parseInt(editMonths, 10) || 0;
+    if (canEditInstallmentTerms && (total < 0.01 || months < 1)) {
+      toast({
+        title: "Datos incompletos",
+        description: "Indica monto total y número de cuotas válidos.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const patchBody: DeductionInstallmentPlanPatchBody = {
+      label: editLabel.trim(),
+      category: editCategory as DeductionInstallmentPlanWriteBody["category"],
+      description: editDescription.trim() || null,
+      notes: editNotes.trim() || null,
+      asset_id: editAssetId ? Number.parseInt(editAssetId, 10) : null,
+    };
+    if (canEditInstallmentTerms) {
+      patchBody.total_amount = total;
+      patchBody.installment_count = months;
+    }
     setEditSaving(true);
     try {
-      await patchDeductionInstallmentPlan(selectedEmpId, editTarget.id, {
-        label: editLabel.trim(),
-        category: editCategory as DeductionInstallmentPlanWriteBody["category"],
-        description: editDescription.trim() || null,
-        notes: editNotes.trim() || null,
-        asset_id: editAssetId ? Number.parseInt(editAssetId, 10) : null,
-      });
+      await patchDeductionInstallmentPlan(selectedEmpId, editTarget.id, patchBody);
       toast({ title: "Actualizado", description: "Los datos del plan se guardaron." });
       setEditTarget(null);
       await loadPlans();
@@ -267,11 +288,18 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
     }
   };
 
-  const handleCancelPlan = async () => {
+  const handleTogglePlanStatus = async () => {
     if (!cancelTarget || Number.isNaN(selectedEmpId)) return;
+    const isReactivation = cancelTarget.status === "cancelled";
+    const nextStatus: "active" | "cancelled" = isReactivation ? "active" : "cancelled";
     try {
-      await patchDeductionInstallmentPlan(selectedEmpId, cancelTarget.id, { status: "cancelled" });
-      toast({ title: "Plan cancelado", description: "No se aplicarán más cuotas desde este plan." });
+      await patchDeductionInstallmentPlan(selectedEmpId, cancelTarget.id, { status: nextStatus });
+      toast({
+        title: isReactivation ? "Plan reactivado" : "Plan cancelado",
+        description: isReactivation
+          ? "El plan volvió a estado activo y podrá aplicar cuotas pendientes."
+          : "No se aplicarán más cuotas desde este plan.",
+      });
       setCancelTarget(null);
       await loadPlans();
     } catch (e) {
@@ -354,36 +382,36 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
         <div>
           <h1 className="text-2xl font-bold">Descuentos</h1>
           <p className="text-muted-foreground text-sm mt-1">
-            Planes de descuento en cuotas por empleado. Las cuotas se aplican al aprobar boletas con código{" "}
+            Planes de descuento en cuotas por colaborador. Las cuotas se aplican al aprobar boletas con código{" "}
             <span className="font-mono text-xs">installment:ID</span>.
           </p>
         </div>
       ) : (
         <p className="text-sm text-muted-foreground">
-          Planes de descuento en cuotas por empleado. Las cuotas se aplican al aprobar boletas con código{" "}
+          Planes de descuento en cuotas por colaborador. Las cuotas se aplican al aprobar boletas con código{" "}
           <span className="font-mono text-xs">installment:ID</span>.
         </p>
       )}
 
       <Card className="shadow-card">
         <CardHeader>
-          <CardTitle className="text-base">Seleccionar empleado</CardTitle>
+          <CardTitle className="text-base">Seleccionar colaborador</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-col sm:flex-row gap-3 sm:items-end">
           <div className="flex-1 space-y-2">
-            <Label>Empleado</Label>
+            <Label>Colaborador</Label>
             <Select
               value={employeeId}
               onValueChange={setEmployeeId}
               disabled={employeesLoading}
             >
               <SelectTrigger>
-                <SelectValue placeholder={employeesLoading ? "Cargando…" : "Elegir empleado"} />
+                <SelectValue placeholder={employeesLoading ? "Cargando…" : "Elegir colaborador"} />
               </SelectTrigger>
               <SelectContent>
                 {employees.map((emp) => (
                   <SelectItem key={emp.id} value={String(emp.id)}>
-                    {formatEmployeeName(emp)}
+                    {formatEmployeeFullName(emp)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -412,7 +440,7 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
                 <Loader2 className="w-4 h-4 animate-spin" /> Cargando…
               </p>
             ) : plans.length === 0 ? (
-              <p className="p-6 text-sm text-muted-foreground">No hay planes para este empleado.</p>
+              <p className="p-6 text-sm text-muted-foreground">No hay planes para este colaborador.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -500,7 +528,7 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
                                 <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => openEdit(p)}>
                                   <Pencil className="w-3.5 h-3.5 mr-1" /> Editar
                                 </Button>
-                                {p.status === "active" ? (
+                                {p.status === "active" || p.status === "cancelled" ? (
                                   <Button
                                     type="button"
                                     variant="ghost"
@@ -508,7 +536,12 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
                                     className="h-8"
                                     onClick={() => setCancelTarget(p)}
                                   >
-                                    <XCircle className="w-3.5 h-3.5 mr-1" /> Cancelar
+                                    {p.status === "cancelled" ? (
+                                      <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                                    ) : (
+                                      <XCircle className="w-3.5 h-3.5 mr-1" />
+                                    )}
+                                    {p.status === "cancelled" ? "Reactivar" : "Cancelar"}
                                   </Button>
                                 ) : null}
                                 <Button
@@ -536,7 +569,7 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
         </Card>
         </>
       ) : (
-        <p className="text-sm text-muted-foreground">Elige un empleado para ver y gestionar sus descuentos.</p>
+        <p className="text-sm text-muted-foreground">Elige un colaborador para ver y gestionar sus descuentos.</p>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -625,6 +658,29 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
               <Label>Descripción</Label>
               <Textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} rows={3} />
             </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label>Monto total (PEN)</Label>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  value={editTotal}
+                  onChange={(e) => setEditTotal(normalizeMoneyDecimalInput(e.target.value))}
+                  placeholder="600.00"
+                  disabled={editTarget?.installments_applied !== 0}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>N.° cuotas</Label>
+                <Input
+                  value={editMonths}
+                  onChange={(e) => setEditMonths(e.target.value)}
+                  placeholder="3"
+                  inputMode="numeric"
+                  disabled={editTarget?.installments_applied !== 0}
+                />
+              </div>
+            </div>
             <div className="space-y-1.5">
               <Label>Activo / equipo</Label>
               <Select value={editAssetId || "__none__"} onValueChange={(v) => setEditAssetId(v === "__none__" ? "" : v)}>
@@ -647,7 +703,9 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
             </div>
             {editTarget ? (
               <p className="text-xs text-muted-foreground">
-                Monto total y cuotas no se editan aquí; usa Boletas para aplicar cada cuota al aprobar.
+                {editTarget.installments_applied >= 1
+                  ? "Monto total y cuotas quedaron bloqueados porque la primera cuota ya fue aprobada."
+                  : "Puedes ajustar monto y cuotas mientras aún no exista ninguna cuota aprobada."}
               </p>
             ) : null}
           </div>
@@ -665,15 +723,21 @@ export default function DeductionsPage({ embedded = false }: DeductionsPageProps
       <AlertDialog open={cancelTarget != null} onOpenChange={(o) => !o && setCancelTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>¿Cancelar este plan?</AlertDialogTitle>
+            <AlertDialogTitle>{cancelTarget?.status === "cancelled" ? "¿Reactivar este plan?" : "¿Cancelar este plan?"}</AlertDialogTitle>
             <AlertDialogDescription>
-              No se descontarán más cuotas desde este plan. Las cuotas ya aplicadas en boletas aprobadas no se revierten.
+              {cancelTarget?.status === "cancelled"
+                ? "El plan volverá a estado activo para aplicar sus cuotas pendientes."
+                : "No se descontarán más cuotas desde este plan. Las cuotas ya aplicadas en boletas aprobadas no se revierten."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Volver</AlertDialogCancel>
-            <Button type="button" variant="destructive" onClick={() => void handleCancelPlan()}>
-              Cancelar plan
+            <Button
+              type="button"
+              variant={cancelTarget?.status === "cancelled" ? "default" : "destructive"}
+              onClick={() => void handleTogglePlanStatus()}
+            >
+              {cancelTarget?.status === "cancelled" ? "Reactivar plan" : "Cancelar plan"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

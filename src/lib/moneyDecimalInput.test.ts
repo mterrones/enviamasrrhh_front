@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeMoneyDecimalInput } from "./moneyDecimalInput";
+import { normalizeMoneyDecimalInput, normalizeRatioDecimalInput } from "./moneyDecimalInput";
 
 describe("normalizeMoneyDecimalInput", () => {
   it("strips leading zeros on integer part", () => {
@@ -32,5 +32,23 @@ describe("normalizeMoneyDecimalInput", () => {
 
   it("collapses multiple dots", () => {
     expect(normalizeMoneyDecimalInput("1.2.34")).toBe("1.23");
+  });
+});
+
+describe("normalizeRatioDecimalInput", () => {
+  it("allows up to eight fractional digits", () => {
+    expect(normalizeRatioDecimalInput("0.123")).toBe("0.123");
+    expect(normalizeRatioDecimalInput("0.12345678")).toBe("0.12345678");
+    expect(normalizeRatioDecimalInput("0.123456789")).toBe("0.12345678");
+  });
+
+  it("preserves two decimal forms while typing", () => {
+    expect(normalizeRatioDecimalInput("0.10")).toBe("0.10");
+    expect(normalizeRatioDecimalInput("0.5")).toBe("0.5");
+  });
+
+  it("still caps at two decimals for money normalizer", () => {
+    expect(normalizeMoneyDecimalInput("0.123")).toBe("0.12");
+    expect(normalizeMoneyDecimalInput("0.999")).toBe("0.99");
   });
 });

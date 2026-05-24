@@ -23,12 +23,14 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ListPaginationBar } from "@/components/ListPaginationBar";
+import { PendingPdfFileInput } from "@/components/PendingPdfFileInput";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { ApiHttpError } from "@/api/client";
 import type { VacationRequest } from "@/api/vacationRequests";
 import type { AttendanceRecord } from "@/api/attendance";
 import { filterWeekdayAttendanceRecords, isWeekendYmd, recordDateToIsoDay } from "@/lib/weekendAttendance";
+import { buildMonthCalendarDaysWithVacations } from "@/lib/attendanceCalendarVacations";
 import {
   createPortalVacationRequest,
   createPortalResignationRequest,
@@ -41,6 +43,7 @@ import {
   downloadPortalPayslipPdfBlob,
   downloadPortalResignationLetterBlob,
   fetchAllPortalAttendanceInRange,
+  fetchAllApprovedPortalVacations,
   patchPortalAttendanceJustification,
   uploadPortalAttendanceJustificationFile,
   fetchPortalAssetsPage,
@@ -53,9 +56,12 @@ import {
   fetchPortalVacationBalance,
   fetchPortalNotificationsPage,
   fetchPortalEmployeePhotoBlob,
+  fetchPortalEmployeeSignatureBlob,
   patchPortalNotificationRead,
   postPortalNotificationsReadAll,
   patchPortalContact,
+  deletePortalEmployeeSignature,
+  uploadPortalEmployeeSignature,
   type PortalContact,
   type PortalEmployeeDocumentRow,
   type PortalPersonalSnapshot,
@@ -67,7 +73,8 @@ import {
   type VacationBalanceData,
 } from "@/api/portal";
 import { updateEmployee } from "@/api/employees";
-import { uploadEmployeeDocument, type EmployeeDocumentType } from "@/api/employeeDocuments";
+import { deleteEmployeeDocument, uploadEmployeeDocument, type EmployeeDocumentType } from "@/api/employeeDocuments";
+import { EmployeeDocumentActionBar } from "@/components/EmployeeDocumentActionBar";
 import { DEFAULT_LIST_PAGE_SIZE } from "@/constants/pagination";
 import {
   FileText,
@@ -85,7 +92,10 @@ import {
 import { addDays, format, differenceInCalendarDays, parseISO } from "date-fns";
 import { cn } from "@/lib/utils";
 import { formatDecimalHoursAsDuration } from "@/lib/formatWorkedDuration";
+import { formatEmployeeModalityDisplay } from "@/lib/employeeModalityCatalog";
 import { formatAppDate, formatAppDateTime, formatAppMonthYear } from "@/lib/formatAppDate";
+import { displayEmployeeDni, editableEmployeeDni } from "@/lib/employeeDniDisplay";
+import { confirmReplaceEmployeeDocument } from "@/lib/employeeDocumentUi";
 
 function formatPen(amount: string): string {
   const n = Number(amount);
@@ -116,8 +126,9 @@ function portalManagerLabel(name: string | null | undefined): string {
 }
 
 const portalPersonalPdfSlots = [
-  { type: "antecedentes" as const, label: "Antecedentes policiales (PDF)" },
+  { type: "dni_scan" as const, label: "Escaneo de DNI (PDF)" },
   { type: "cv" as const, label: "CV (PDF)" },
+  { type: "antecedentes" as const, label: "Antecedentes policiales (PDF)" },
   { type: "medical_exam" as const, label: "Examen Médico Ocupacional (PDF)" },
 ];
 
@@ -227,12 +238,22 @@ function formatNotificationDate(iso: string | null): string {
 
 const portalBankCatalog = ["BCP", "BBVA", "Interbank", "Scotiabank", "BanBif", "Caja Arequipa"];
 const portalPensionCatalog = ["AFP Integra", "AFP Prima", "AFP Profuturo", "AFP Habitat", "ONP"];
+const portalEmployerContributionOptionCatalog = [
+  { value: "__none__", label: "Ninguna" },
+  { value: "essalud", label: "Essalud" },
+  { value: "sis_microempresa", label: "SIS Microempresas" },
+];
 const portalEducationCatalog = ["Secundaria", "Técnico", "Universitario", "Postgrado"];
+const portalDocumentTypes = [
+  { value: "dni", label: "DNI" },
+  { value: "ce", label: "Carné de extranjería" },
+  { value: "passport", label: "Pasaporte" },
+];
 
-type PortalSelfPdfKey = Extract<EmployeeDocumentType, "antecedentes" | "cv" | "medical_exam">;
+type PortalSelfPdfKey = Extract<EmployeeDocumentType, "dni_scan" | "antecedentes" | "cv" | "medical_exam">;
 
 function emptyPortalSelfPdfFiles(): Record<PortalSelfPdfKey, File | null> {
-  return { antecedentes: null, cv: null, medical_exam: null };
+  return { dni_scan: null, cv: null, antecedentes: null, medical_exam: null };
 }
 
 const PORTAL_TAB_VALUES = new Set(["boletas", "asistencia", "solicitudes", "equipos", "datos", "notificaciones"]);
@@ -322,11 +343,12 @@ export default function EmployeePortalPage() {
       (hasPermission("employees.self_edit") ||
         (user?.impersonation?.active === true && hasPermission("employees.edit"))),
   );
+  const canEditPortalDatos = hasEmployee;
   const isAdminRrhhRole = user?.rol === "superadmin_rrhh" || user?.rol === "admin_rrhh";
   const emptyStateNoEmployeeMessage =
     isAdminRrhhRole && !hasEmployee
-      ? "Sin datos: este portal muestra información de la ficha de empleado vinculada a tu usuario. Las cuentas administrativas no suelen tener ficha propia aquí."
-      : "Sin datos hasta vincular tu ficha de empleado.";
+      ? "Sin datos: este portal muestra información de la ficha de colaborador vinculada a tu usuario. Las cuentas administrativas no suelen tener ficha propia aquí."
+      : "Sin datos hasta vincular tu ficha de colaborador.";
   const welcomeName = user?.nombre ?? "…";
   const hidePortalTabBar = user?.rol === "empleado";
   const isImpersonating = user?.impersonation?.active === true;
@@ -404,12 +426,14 @@ export default function EmployeePortalPage() {
   const [vacationBalanceError, setVacationBalanceError] = useState<string | null>(null);
 
   const [attendanceRecords, setAttendanceRecords] = useState<PortalAttendanceRow[]>([]);
+  const [portalApprovedVacations, setPortalApprovedVacations] = useState<VacationRequest[]>([]);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [portalAttYear, setPortalAttYear] = useState(() => new Date().getFullYear());
   const [portalAttMonthIndex, setPortalAttMonthIndex] = useState(() => new Date().getMonth());
   const [portalAttDayOpen, setPortalAttDayOpen] = useState(false);
   const [portalAttDayRecord, setPortalAttDayRecord] = useState<PortalAttendanceRow | null>(null);
+  const [portalAttDayStatus, setPortalAttDayStatus] = useState<string | null>(null);
   const [portalAttDayIso, setPortalAttDayIso] = useState<string | null>(null);
   const [portalJustificationDraft, setPortalJustificationDraft] = useState("");
   const [portalJustificationFile, setPortalJustificationFile] = useState<File | null>(null);
@@ -439,7 +463,9 @@ export default function EmployeePortalPage() {
   const [contactEmergencyPhone, setContactEmergencyPhone] = useState("");
   const [bank, setBank] = useState("");
   const [bankAccount, setBankAccount] = useState("");
+  const [bankAccountCci, setBankAccountCci] = useState("");
   const [pensionFund, setPensionFund] = useState("");
+  const [employerContributionOption, setEmployerContributionOption] = useState("__none__");
   const [contactLoading, setContactLoading] = useState(false);
   const [contactSaving, setContactSaving] = useState(false);
   const [contactError, setContactError] = useState<string | null>(null);
@@ -447,13 +473,30 @@ export default function EmployeePortalPage() {
   const [portalWork, setPortalWork] = useState<PortalWorkSnapshot | null>(null);
   const [hasEmployeePhotoFile, setHasEmployeePhotoFile] = useState(false);
   const [profilePhotoObjectUrl, setProfilePhotoObjectUrl] = useState<string | null>(null);
+  const [hasEmployeeSignatureFile, setHasEmployeeSignatureFile] = useState(false);
+  const [signatureObjectUrl, setSignatureObjectUrl] = useState<string | null>(null);
+  const [pendingPortalSignatureFile, setPendingPortalSignatureFile] = useState<File | null>(null);
+  const [pendingPortalSignatureRemoval, setPendingPortalSignatureRemoval] = useState(false);
+  const portalSignatureInputRef = useRef<HTMLInputElement>(null);
   const [portalDocuments, setPortalDocuments] = useState<PortalEmployeeDocumentRow[]>([]);
-  const [portalEmployeeDocDownloadingId, setPortalEmployeeDocDownloadingId] = useState<number | null>(null);
+  const [portalEmployeeDocActionId, setPortalEmployeeDocActionId] = useState<number | null>(null);
   const [portalSelfDni, setPortalSelfDni] = useState("");
+  const [portalSelfDocumentType, setPortalSelfDocumentType] = useState("dni");
+  const [portalSelfEmployeeCode, setPortalSelfEmployeeCode] = useState("");
+  const [portalSelfMiddleName, setPortalSelfMiddleName] = useState("");
+  const [portalSelfSecondLastName, setPortalSelfSecondLastName] = useState("");
   const [portalSelfBirthDate, setPortalSelfBirthDate] = useState("");
   const [portalSelfEducation, setPortalSelfEducation] = useState("");
   const [portalSelfDegree, setPortalSelfDegree] = useState("");
+  const [portalSelfCuspp, setPortalSelfCuspp] = useState("");
+  const [portalSelfDependentsCount, setPortalSelfDependentsCount] = useState("");
+  const [portalSelfHasFamilyAllowance, setPortalSelfHasFamilyAllowance] = useState(false);
   const [portalSelfPdfFiles, setPortalSelfPdfFiles] = useState<Record<PortalSelfPdfKey, File | null>>(emptyPortalSelfPdfFiles);
+  const [isDatosEditing, setIsDatosEditing] = useState(false);
+  const lastPortalContactRef = useRef<PortalContact | null>(null);
+
+  const isPersonalFieldEditable = isDatosEditing && canSelfEditPersonalInPortal;
+  const isDatosFieldEditable = isDatosEditing && canEditPortalDatos;
 
   const [notificationPage, setNotificationPage] = useState(1);
   const [notifications, setNotifications] = useState<PortalEmployeeNotification[]>([]);
@@ -486,6 +529,15 @@ export default function EmployeePortalPage() {
   const portalDocByType = useMemo(() => portalLatestDocByType(portalDocuments), [portalDocuments]);
   const portalContractDoc = portalDocByType.get("contract");
 
+  const handlePortalSelfPdfFileSelect = (pdfKey: PortalSelfPdfKey, label: string) => (file: File | null) => {
+    if (file && portalDocByType.has(pdfKey)) {
+      if (!confirmReplaceEmployeeDocument(label)) {
+        return;
+      }
+    }
+    setPortalSelfPdfFiles((prev) => ({ ...prev, [pdfKey]: file }));
+  };
+
   const attendancePeriod = useMemo(() => {
     const from = format(new Date(portalAttYear, portalAttMonthIndex, 1), "yyyy-MM-dd");
     const to = format(new Date(portalAttYear, portalAttMonthIndex + 1, 0), "yyyy-MM-dd");
@@ -501,14 +553,29 @@ export default function EmployeePortalPage() {
     [resignations],
   );
 
+  const portalCalDays = useMemo(
+    () =>
+      buildMonthCalendarDaysWithVacations(
+        portalAttYear,
+        portalAttMonthIndex,
+        attendanceRecords,
+        portalApprovedVacations,
+        recordDateToIsoDay,
+      ),
+    [attendanceRecords, portalApprovedVacations, portalAttYear, portalAttMonthIndex],
+  );
+
   const attendanceStats = useMemo(() => {
     let asistidos = 0;
     let faltas = 0;
     let tardanzas = 0;
+    let vacaciones = 0;
     let otros = 0;
-    for (const r of attendanceRecords) {
-      switch (r.status) {
+    for (const { day, status } of portalCalDays) {
+      if (isWeekendYmd(portalAttYear, portalAttMonthIndex, day)) continue;
+      switch (status) {
         case "asistido":
+        case "recuperacion":
           asistidos++;
           break;
         case "falta_j":
@@ -519,28 +586,17 @@ export default function EmployeePortalPage() {
         case "tardanza_nj":
           tardanzas++;
           break;
+        case "vacaciones":
+          vacaciones++;
+          break;
+        case "__none__":
+          break;
         default:
           otros++;
       }
     }
-    return { asistidos, faltas, tardanzas, otros };
-  }, [attendanceRecords]);
-
-  const portalCalDays = useMemo(() => {
-    const y = portalAttYear;
-    const m = portalAttMonthIndex;
-    const total = portalCalMonthDayCount(y, m);
-    const map = new Map<string, string>();
-    for (const r of attendanceRecords) {
-      map.set(recordDateToIsoDay(r), r.status);
-    }
-    return Array.from({ length: total }, (_, i) => {
-      const day = i + 1;
-      const iso = format(new Date(y, m, day), "yyyy-MM-dd");
-      const statusSt = map.get(iso) ?? "__none__";
-      return { day, status: statusSt };
-    });
-  }, [attendanceRecords, portalAttYear, portalAttMonthIndex]);
+    return { asistidos, faltas, tardanzas, vacaciones, otros };
+  }, [portalCalDays, portalAttYear, portalAttMonthIndex]);
 
   const portalCalFirstBlank = useMemo(
     () => portalCalFirstDayOffset(portalAttYear, portalAttMonthIndex),
@@ -650,39 +706,49 @@ export default function EmployeePortalPage() {
   const loadAttendance = useCallback(async () => {
     if (!hasEmployee) {
       setAttendanceRecords([]);
+      setPortalApprovedVacations([]);
       setAttendanceError(null);
       return;
     }
     setAttendanceLoading(true);
     setAttendanceError(null);
     try {
-      const rows = await fetchAllPortalAttendanceInRange({
-        from: attendancePeriod.from,
-        to: attendancePeriod.to,
-      });
+      const [rows, approvedVacations] = await Promise.all([
+        fetchAllPortalAttendanceInRange({
+          from: attendancePeriod.from,
+          to: attendancePeriod.to,
+        }),
+        fetchAllApprovedPortalVacations(),
+      ]);
       setAttendanceRecords(filterWeekdayAttendanceRecords(rows) as PortalAttendanceRow[]);
+      setPortalApprovedVacations(approvedVacations);
     } catch (e) {
       setAttendanceError(requestErrorMessage(e));
       setAttendanceRecords([]);
+      setPortalApprovedVacations([]);
     } finally {
       setAttendanceLoading(false);
     }
   }, [hasEmployee, attendancePeriod.from, attendancePeriod.to]);
 
-  const openPortalAttendanceDay = useCallback((iso: string, record: PortalAttendanceRow | null) => {
-    setPortalAttDayIso(iso);
-    setPortalAttDayRecord(record);
-    setPortalJustificationDraft(
-      record?.justification && String(record.justification).trim() ? String(record.justification) : "",
-    );
-    setPortalJustificationFile(null);
-    setPortalAttDayOpen(true);
-    requestAnimationFrame(() => {
-      if (portalJustificationFileInputRef.current) {
-        portalJustificationFileInputRef.current.value = "";
-      }
-    });
-  }, []);
+  const openPortalAttendanceDay = useCallback(
+    (iso: string, record: PortalAttendanceRow | null, dayStatus: string) => {
+      setPortalAttDayIso(iso);
+      setPortalAttDayRecord(record);
+      setPortalAttDayStatus(dayStatus);
+      setPortalJustificationDraft(
+        record?.justification && String(record.justification).trim() ? String(record.justification) : "",
+      );
+      setPortalJustificationFile(null);
+      setPortalAttDayOpen(true);
+      requestAnimationFrame(() => {
+        if (portalJustificationFileInputRef.current) {
+          portalJustificationFileInputRef.current.value = "";
+        }
+      });
+    },
+    [],
+  );
 
   const handlePortalCalendarDayClick = useCallback(
     (day: number) => {
@@ -699,9 +765,18 @@ export default function EmployeePortalPage() {
       const iso = format(new Date(y, mo, day), "yyyy-MM-dd");
       const rec =
         (attendanceRecords.find((r) => recordDateToIsoDay(r) === iso) as PortalAttendanceRow | undefined) ?? null;
-      openPortalAttendanceDay(iso, rec);
+      const dayStatus = portalCalDays.find((d) => d.day === day)?.status ?? "__none__";
+      openPortalAttendanceDay(iso, rec, dayStatus);
     },
-    [attendanceLoading, portalAttYear, portalAttMonthIndex, attendanceRecords, openPortalAttendanceDay, toast],
+    [
+      attendanceLoading,
+      portalAttYear,
+      portalAttMonthIndex,
+      attendanceRecords,
+      portalCalDays,
+      openPortalAttendanceDay,
+      toast,
+    ],
   );
 
   const submitPortalJustification = useCallback(async () => {
@@ -778,6 +853,7 @@ export default function EmployeePortalPage() {
   };
 
   const applyPortalContactResponse = useCallback((d: PortalContact) => {
+    lastPortalContactRef.current = d;
     setCorporateEmail(d.corporate_email ?? "");
     setContactPhone(d.phone ?? "");
     setContactPersonalEmail(d.personal_email ?? "");
@@ -785,10 +861,19 @@ export default function EmployeePortalPage() {
     setContactEmergencyPhone(d.emergency_contact_phone ?? "");
     setBank(d.bank ?? "");
     setBankAccount(d.bank_account ?? "");
+    setBankAccountCci(d.bank_account_cci ?? "");
     setPensionFund(d.pension_fund ?? "");
+    setEmployerContributionOption(d.employer_contribution_option ?? "__none__");
+    setPortalSelfCuspp(d.cuspp ?? "");
+    setPortalSelfDependentsCount(
+      d.dependents_count != null && !Number.isNaN(d.dependents_count) ? String(d.dependents_count) : "",
+    );
+    setPortalSelfHasFamilyAllowance(Boolean(d.has_family_allowance));
     setPortalPersonal(d.personal);
     setPortalWork(d.work);
     setHasEmployeePhotoFile(Boolean(d.has_employee_photo_file));
+    setHasEmployeeSignatureFile(Boolean(d.has_employee_signature_file));
+    setPendingPortalSignatureRemoval(false);
   }, []);
 
   const loadContact = useCallback(async () => {
@@ -800,12 +885,26 @@ export default function EmployeePortalPage() {
       setContactEmergencyPhone("");
       setBank("");
       setBankAccount("");
+      setBankAccountCci("");
       setPensionFund("");
+      setEmployerContributionOption("__none__");
+      setPortalSelfCuspp("");
+      setPortalSelfDependentsCount("");
+      setPortalSelfHasFamilyAllowance(false);
+      setPortalSelfDocumentType("dni");
+      setPortalSelfEmployeeCode("");
       setPortalPersonal(null);
       setPortalWork(null);
       setHasEmployeePhotoFile(false);
+      setHasEmployeeSignatureFile(false);
+      setPendingPortalSignatureFile(null);
+      setPendingPortalSignatureRemoval(false);
       setPortalDocuments([]);
       setProfilePhotoObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      setSignatureObjectUrl((prev) => {
         if (prev) URL.revokeObjectURL(prev);
         return null;
       });
@@ -828,17 +927,43 @@ export default function EmployeePortalPage() {
 
   useEffect(() => {
     if (!canSelfEditPersonalInPortal || !portalPersonal) return;
-    setPortalSelfDni((portalPersonal.dni ?? "").trim());
+    setPortalSelfDocumentType(portalPersonal.document_type ?? "dni");
+    setPortalSelfDni(editableEmployeeDni(portalPersonal.dni));
+    setPortalSelfEmployeeCode(portalPersonal.employee_code ?? "");
+    setPortalSelfMiddleName(portalPersonal.middle_name ?? "");
+    setPortalSelfSecondLastName(portalPersonal.second_last_name ?? "");
     setPortalSelfBirthDate(portalPersonal.birth_date ? portalPersonal.birth_date.slice(0, 10) : "");
     setPortalSelfEducation(portalPersonal.education_level ?? "");
     setPortalSelfDegree(portalPersonal.degree ?? "");
   }, [canSelfEditPersonalInPortal, portalPersonal]);
 
+  const handleViewPortalEmployeeDocument = useCallback(
+    async (doc: PortalEmployeeDocumentRow) => {
+      setPortalEmployeeDocActionId(doc.id);
+      try {
+        const blob = await downloadPortalEmployeeDocumentBlob(doc.id, { attachment: false });
+        const url = URL.createObjectURL(blob);
+        window.open(url, "_blank", "noopener");
+        window.setTimeout(() => URL.revokeObjectURL(url), 3_600_000);
+      } catch (e) {
+        const msg = e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudo abrir";
+        toast({
+          title: "Error",
+          description: typeof msg === "string" ? msg : "Intenta de nuevo",
+          variant: "destructive",
+        });
+      } finally {
+        setPortalEmployeeDocActionId(null);
+      }
+    },
+    [toast],
+  );
+
   const handleDownloadPortalEmployeeDocument = useCallback(
     async (doc: PortalEmployeeDocumentRow) => {
-      setPortalEmployeeDocDownloadingId(doc.id);
+      setPortalEmployeeDocActionId(doc.id);
       try {
-        const blob = await downloadPortalEmployeeDocumentBlob(doc.id);
+        const blob = await downloadPortalEmployeeDocumentBlob(doc.id, { attachment: true });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -855,15 +980,74 @@ export default function EmployeePortalPage() {
           variant: "destructive",
         });
       } finally {
-        setPortalEmployeeDocDownloadingId(null);
+        setPortalEmployeeDocActionId(null);
       }
     },
     [toast],
   );
 
+  const handleDeletePortalEmployeeDocument = useCallback(
+    async (doc: PortalEmployeeDocumentRow, label: string) => {
+      if (selfEmployeeId == null) return;
+      if (!window.confirm(`¿Eliminar el documento "${label}"? Esta acción no se puede deshacer.`)) return;
+      setPortalEmployeeDocActionId(doc.id);
+      try {
+        await deleteEmployeeDocument(selfEmployeeId, doc.id);
+        toast({ title: "Documento eliminado", description: `${label} se eliminó correctamente.` });
+        const docRes = await fetchPortalDocuments();
+        setPortalDocuments(docRes.data);
+      } catch (e) {
+        const msg = e instanceof ApiHttpError ? e.apiError?.message ?? e.message : "No se pudo eliminar";
+        toast({
+          title: "Error",
+          description: typeof msg === "string" ? msg : "Intenta de nuevo",
+          variant: "destructive",
+        });
+      } finally {
+        setPortalEmployeeDocActionId(null);
+      }
+    },
+    [selfEmployeeId, toast],
+  );
+
   useEffect(() => {
     if (activeTab === "datos") void loadContact();
   }, [activeTab, loadContact]);
+
+  useEffect(() => {
+    if (activeTab !== "datos") {
+      setIsDatosEditing(false);
+    }
+  }, [activeTab]);
+
+  const resetPortalPersonalFieldsFromSnapshot = useCallback((personal: PortalPersonalSnapshot | null) => {
+    if (!personal) return;
+    setPortalSelfDocumentType(personal.document_type ?? "dni");
+    setPortalSelfDni(editableEmployeeDni(personal.dni));
+    setPortalSelfEmployeeCode(personal.employee_code ?? "");
+    setPortalSelfMiddleName(personal.middle_name ?? "");
+    setPortalSelfSecondLastName(personal.second_last_name ?? "");
+    setPortalSelfBirthDate(personal.birth_date ? personal.birth_date.slice(0, 10) : "");
+    setPortalSelfEducation(personal.education_level ?? "");
+    setPortalSelfDegree(personal.degree ?? "");
+  }, []);
+
+  const enterDatosEditMode = useCallback(() => {
+    setIsDatosEditing(true);
+  }, []);
+
+  const handleCancelDatosEdit = useCallback(() => {
+    const snap = lastPortalContactRef.current;
+    if (snap) {
+      applyPortalContactResponse(snap);
+      resetPortalPersonalFieldsFromSnapshot(snap.personal);
+    }
+    setPortalSelfPdfFiles(emptyPortalSelfPdfFiles());
+    setPendingPortalSignatureFile(null);
+    setPendingPortalSignatureRemoval(false);
+    setIsDatosEditing(false);
+    void loadContact();
+  }, [applyPortalContactResponse, resetPortalPersonalFieldsFromSnapshot, loadContact]);
 
   useEffect(() => {
     if (activeTab !== "datos" || !hasEmployee || contactLoading || !hasEmployeePhotoFile) {
@@ -900,6 +1084,42 @@ export default function EmployeePortalPage() {
       });
     };
   }, [activeTab, hasEmployee, contactLoading, hasEmployeePhotoFile]);
+
+  useEffect(() => {
+    if (activeTab !== "datos" || !hasEmployee || contactLoading || !hasEmployeeSignatureFile) {
+      setSignatureObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const blob = await fetchPortalEmployeeSignatureBlob();
+        if (cancelled) return;
+        const url = URL.createObjectURL(blob);
+        setSignatureObjectUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+      } catch {
+        if (!cancelled) {
+          setSignatureObjectUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return null;
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      setSignatureObjectUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
+    };
+  }, [activeTab, hasEmployee, contactLoading, hasEmployeeSignatureFile]);
 
   const loadNotifications = useCallback(async () => {
     if (!hasEmployee) {
@@ -1114,6 +1334,24 @@ export default function EmployeePortalPage() {
     }
   };
 
+  const handlePortalSignatureFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    setPendingPortalSignatureFile(file);
+    if (file) {
+      setPendingPortalSignatureRemoval(false);
+      setHasEmployeeSignatureFile(true);
+    }
+    if (!file) {
+      return;
+    }
+    const previewUrl = URL.createObjectURL(file);
+    setSignatureObjectUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return previewUrl;
+    });
+  }, []);
+
   const handleSaveContact = async () => {
     const emailTrim = contactPersonalEmail.trim();
     if (emailTrim && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim)) {
@@ -1124,28 +1362,68 @@ export default function EmployeePortalPage() {
       });
       return;
     }
-    if (canSelfEditPersonalInPortal && selfEmployeeId != null) {
-      const dniTrim = portalSelfDni.trim();
-      if (!dniTrim) {
-        toast({
-          title: "DNI requerido",
-          description: "Indica tu documento de identidad.",
-          variant: "destructive",
-        });
-        return;
-      }
-    }
+    const dniTrim = portalSelfDni.trim();
+    const hasPdfUploads = (["dni_scan", "cv", "antecedentes", "medical_exam"] as PortalSelfPdfKey[]).some(
+      (key) => portalSelfPdfFiles[key] != null,
+    );
+    const hasPersonalFieldChanges =
+      portalSelfDocumentType !== (portalPersonal?.document_type ?? "dni") ||
+      dniTrim !== editableEmployeeDni(portalPersonal?.dni) ||
+      portalSelfEmployeeCode.trim() !== (portalPersonal?.employee_code ?? "").trim() ||
+      portalSelfMiddleName.trim() !== (portalPersonal?.middle_name ?? "").trim() ||
+      portalSelfSecondLastName.trim() !== (portalPersonal?.second_last_name ?? "").trim() ||
+      portalSelfBirthDate !== (portalPersonal?.birth_date ? portalPersonal.birth_date.slice(0, 10) : "") ||
+      portalSelfEducation !== (portalPersonal?.education_level ?? "") ||
+      portalSelfDegree !== (portalPersonal?.degree ?? "") ||
+      employerContributionOption !== (lastPortalContactRef.current?.employer_contribution_option ?? "__none__") ||
+      portalSelfCuspp.trim().toUpperCase() !== (lastPortalContactRef.current?.cuspp ?? "").trim().toUpperCase() ||
+      portalSelfDependentsCount.trim() !==
+        (lastPortalContactRef.current?.dependents_count != null
+          ? String(lastPortalContactRef.current.dependents_count)
+          : "") ||
+      portalSelfHasFamilyAllowance !== Boolean(lastPortalContactRef.current?.has_family_allowance);
+    const shouldUpdatePersonal = hasPdfUploads || hasPersonalFieldChanges;
+
     setContactSaving(true);
     try {
       let pdfUploadError = false;
       if (canSelfEditPersonalInPortal && selfEmployeeId != null) {
-        await updateEmployee(selfEmployeeId, {
-          dni: portalSelfDni.trim(),
-          birth_date: portalSelfBirthDate.trim() || null,
-          education_level: portalSelfEducation.trim() || null,
-          degree: portalSelfDegree.trim() || null,
-        });
-        const pdfOrder: PortalSelfPdfKey[] = ["antecedentes", "cv", "medical_exam"];
+        if (shouldUpdatePersonal) {
+          const personalPayload: {
+            document_type: string | null;
+            middle_name: string | null;
+            second_last_name: string | null;
+            birth_date: string | null;
+            education_level: string | null;
+            degree: string | null;
+            employee_code: string | null;
+            cuspp: string | null;
+            dependents_count: number | null;
+            has_family_allowance: boolean;
+            dni?: string | null;
+          } = {
+            document_type: portalSelfDocumentType.trim() || null,
+            middle_name: portalSelfMiddleName.trim() || null,
+            second_last_name: portalSelfSecondLastName.trim() || null,
+            birth_date: portalSelfBirthDate.trim() || null,
+            education_level: portalSelfEducation.trim() || null,
+            degree: portalSelfDegree.trim() || null,
+            employee_code: portalSelfEmployeeCode.trim() || null,
+            cuspp: portalSelfCuspp.trim() ? portalSelfCuspp.trim().toUpperCase() : null,
+            dependents_count:
+              portalSelfDependentsCount.trim() === ""
+                ? null
+                : Number.isNaN(Number.parseInt(portalSelfDependentsCount, 10))
+                  ? null
+                  : Number.parseInt(portalSelfDependentsCount, 10),
+            has_family_allowance: portalSelfHasFamilyAllowance,
+          };
+          if (dniTrim !== editableEmployeeDni(portalPersonal?.dni)) {
+            personalPayload.dni = dniTrim || null;
+          }
+          await updateEmployee(selfEmployeeId, personalPayload);
+        }
+        const pdfOrder: PortalSelfPdfKey[] = ["dni_scan", "cv", "antecedentes", "medical_exam"];
         for (const key of pdfOrder) {
           const file = portalSelfPdfFiles[key];
           if (!file) continue;
@@ -1156,6 +1434,11 @@ export default function EmployeePortalPage() {
           }
         }
       }
+      if (pendingPortalSignatureFile) {
+        await uploadPortalEmployeeSignature(pendingPortalSignatureFile);
+      } else if (pendingPortalSignatureRemoval) {
+        await deletePortalEmployeeSignature();
+      }
 
       const r = await patchPortalContact({
         phone: contactPhone.trim() || null,
@@ -1164,7 +1447,12 @@ export default function EmployeePortalPage() {
         emergency_contact_phone: contactEmergencyPhone.trim() || null,
         bank: bank.trim() || null,
         bank_account: bankAccount.trim() || null,
+        bank_account_cci: bankAccountCci.trim() || null,
         pension_fund: pensionFund.trim() || null,
+        employer_contribution_option:
+          employerContributionOption === "__none__"
+            ? null
+            : (employerContributionOption as "essalud" | "sis_microempresa"),
       });
       applyPortalContactResponse(r.data);
       const docRes = await fetchPortalDocuments();
@@ -1172,6 +1460,8 @@ export default function EmployeePortalPage() {
       if (canSelfEditPersonalInPortal) {
         setPortalSelfPdfFiles(emptyPortalSelfPdfFiles());
       }
+      setPendingPortalSignatureFile(null);
+      setPendingPortalSignatureRemoval(false);
       if (pdfUploadError) {
         toast({
           title: "Cambios guardados con avisos",
@@ -1182,6 +1472,7 @@ export default function EmployeePortalPage() {
       } else {
         toast({ title: "Datos actualizados", description: "Tu información se guardó correctamente." });
       }
+      setIsDatosEditing(false);
     } catch (e) {
       const msg = requestErrorMessage(e);
       toast({ title: "No se pudo guardar", description: msg, variant: "destructive" });
@@ -1310,7 +1601,7 @@ export default function EmployeePortalPage() {
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-bold">Portal del Empleado</h1>
+        <h1 className="text-2xl font-bold">Portal del Colaborador</h1>
         <p className="text-muted-foreground text-sm mt-1">Bienvenido, {welcomeName}</p>
       </div>
 
@@ -1336,14 +1627,14 @@ export default function EmployeePortalPage() {
       {!hasEmployee ? (
         isAdminRrhhRole ? (
           <p className="text-sm text-muted-foreground border border-border bg-muted/40 rounded-md px-4 py-3">
-            Este apartado es el <span className="font-medium text-foreground">portal del empleado</span>: solo muestra boletas,
+            Este apartado es el <span className="font-medium text-foreground">portal del colaborador</span>: solo muestra boletas,
             asistencia y demás datos cuando tu usuario tiene una{" "}
-            <span className="font-medium text-foreground">ficha de empleado vinculada</span>. Las cuentas de administración RRHH
-            no suelen usar esta vista; si además trabajas como empleado, RRHH puede vincular tu usuario a tu ficha en el sistema.
+            <span className="font-medium text-foreground">ficha de colaborador vinculada</span>. Las cuentas de administración RRHH
+            no suelen usar esta vista; si además trabajas como colaborador, RRHH puede vincular tu usuario a tu ficha en el sistema.
           </p>
         ) : (
           <p className="text-sm text-destructive border border-destructive/30 bg-destructive/5 rounded-md px-4 py-3">
-            Tu cuenta no está vinculada a una ficha de empleado. Solicita a RRHH que asocien tu usuario para ver boletas,
+            Tu cuenta no está vinculada a una ficha de colaborador. Solicita a RRHH que asocien tu usuario para ver boletas,
             asistencia, solicitudes, equipos en préstamo y datos personales.
           </p>
         )
@@ -1397,8 +1688,20 @@ export default function EmployeePortalPage() {
             <>
               {portalPersonal && portalWork ? (
                 <Card className="shadow-card">
-                  <CardHeader>
+                  <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-4">
                     <CardTitle className="text-lg">Datos Personales</CardTitle>
+                    {canEditPortalDatos ? (
+                      !isDatosEditing ? (
+                        <Button variant="outline" size="sm" type="button" className="shrink-0" onClick={enterDatosEditMode}>
+                          <Pencil className="w-3.5 h-3.5 mr-1" />
+                          Editar
+                        </Button>
+                      ) : (
+                        <Button variant="ghost" size="sm" type="button" className="shrink-0" onClick={handleCancelDatosEdit}>
+                          Cancelar
+                        </Button>
+                      )
+                    ) : null}
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="flex items-center gap-4 mb-2">
@@ -1418,18 +1721,124 @@ export default function EmployeePortalPage() {
                         La foto proviene de la cuenta corporativa vinculada y no se puede cambiar aquí.
                       </p>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="flex items-center gap-4 mb-2">
+                      <div className="w-36 h-16 rounded-md bg-muted flex items-center justify-center border border-dashed border-border overflow-hidden">
+                        {signatureObjectUrl ? (
+                          <img src={signatureObjectUrl} alt="Firma del colaborador" className="w-full h-full object-contain p-1" />
+                        ) : (
+                          <Upload className="w-6 h-6 text-muted-foreground" />
+                        )}
+                      </div>
+                      {isDatosFieldEditable ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            ref={portalSignatureInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={handlePortalSignatureFileChange}
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => portalSignatureInputRef.current?.click()}
+                          >
+                            {signatureObjectUrl ? "Cambiar firma" : "Subir firma"}
+                          </Button>
+                          {signatureObjectUrl ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                const hadStoredSignature = Boolean(lastPortalContactRef.current?.has_employee_signature_file);
+                                setPendingPortalSignatureFile(null);
+                                setPendingPortalSignatureRemoval(hadStoredSignature);
+                                setHasEmployeeSignatureFile(false);
+                                setSignatureObjectUrl((prev) => {
+                                  if (prev) URL.revokeObjectURL(prev);
+                                  return null;
+                                });
+                              }}
+                            >
+                              Quitar
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground max-w-[min(100%,280px)]">
+                          Tu firma se usa en la boleta aprobada y se actualiza desde aquí cuando tienes permiso de edición.
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                       <div className="space-y-2">
                         <Label>Nombre</Label>
                         <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.first_name)} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Segundo Nombre</Label>
+                        {isPersonalFieldEditable ? (
+                          <>
+                            <Input
+                              value={portalSelfMiddleName}
+                              onChange={(e) => setPortalSelfMiddleName(e.target.value)}
+                              placeholder="Ej: Carlos"
+                            />
+                            <p className="text-xs text-muted-foreground">Ingrese todos los demás nombres si aplica</p>
+                          </>
+                        ) : (
+                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.middle_name)} />
+                        )}
                       </div>
                       <div className="space-y-2">
                         <Label>Apellido</Label>
                         <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.last_name)} />
                       </div>
                       <div className="space-y-2">
+                        <Label>Segundo Apellido</Label>
+                        {isPersonalFieldEditable ? (
+                          <Input
+                            value={portalSelfSecondLastName}
+                            onChange={(e) => setPortalSelfSecondLastName(e.target.value)}
+                            placeholder="Ej: García"
+                          />
+                        ) : (
+                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.second_last_name)} />
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div className="space-y-2">
+                        <Label>Tipo de documento</Label>
+                        {isPersonalFieldEditable ? (
+                          <Select value={portalSelfDocumentType} onValueChange={setPortalSelfDocumentType}>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Seleccionar" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {portalDocumentTypes.map((docType) => (
+                                <SelectItem key={docType.value} value={docType.value}>
+                                  {docType.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            readOnly
+                            className={cn(portalReadonlyFieldClass)}
+                            value={
+                              portalDocumentTypes.find((docType) => docType.value === portalPersonal.document_type)?.label ??
+                              portalFieldDisplay(portalPersonal.document_type)
+                            }
+                          />
+                        )}
+                      </div>
+                      <div className="space-y-2">
                         <Label>DNI</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Input
                             maxLength={16}
                             value={portalSelfDni}
@@ -1438,12 +1847,28 @@ export default function EmployeePortalPage() {
                             autoComplete="off"
                           />
                         ) : (
-                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalPersonal.dni)} />
+                          <Input readOnly className={cn(portalReadonlyFieldClass)} value={displayEmployeeDni(portalPersonal.dni)} />
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Código interno</Label>
+                        {isPersonalFieldEditable ? (
+                          <Input
+                            value={portalSelfEmployeeCode}
+                            onChange={(e) => setPortalSelfEmployeeCode(e.target.value)}
+                            placeholder="Ej: EMP-001"
+                          />
+                        ) : (
+                          <Input
+                            readOnly
+                            className={cn(portalReadonlyFieldClass)}
+                            value={portalFieldDisplay(portalPersonal.employee_code)}
+                          />
                         )}
                       </div>
                       <div className="space-y-2">
                         <Label>Fecha de nacimiento</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Input type="date" value={portalSelfBirthDate} onChange={(e) => setPortalSelfBirthDate(e.target.value)} />
                         ) : (
                           <Input
@@ -1456,7 +1881,7 @@ export default function EmployeePortalPage() {
                       </div>
                       <div className="space-y-2">
                         <Label>Nivel de estudios</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Select value={portalSelfEducation || undefined} onValueChange={(v) => setPortalSelfEducation(v)}>
                             <SelectTrigger>
                               <SelectValue placeholder="Seleccionar" />
@@ -1476,7 +1901,7 @@ export default function EmployeePortalPage() {
                       </div>
                       <div className="space-y-2">
                         <Label>Carrera / Especialidad</Label>
-                        {canSelfEditPersonalInPortal ? (
+                        {isPersonalFieldEditable ? (
                           <Input
                             value={portalSelfDegree}
                             onChange={(e) => setPortalSelfDegree(e.target.value)}
@@ -1487,54 +1912,38 @@ export default function EmployeePortalPage() {
                         )}
                       </div>
                     </div>
-                    {canSelfEditPersonalInPortal ? (
+                    {isPersonalFieldEditable ? (
                       <p className="text-xs text-muted-foreground">
                         Los cambios de esta sección se guardan con el botón <span className="font-medium text-foreground">Guardar cambios</span>{" "}
                         al final de la página.
                       </p>
                     ) : null}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
                       {portalPersonalPdfSlots.map((slot) => {
                         const doc = portalDocByType.get(slot.type);
                         const pdfKey = slot.type as PortalSelfPdfKey;
-                        const pendingFile = canSelfEditPersonalInPortal ? portalSelfPdfFiles[pdfKey] : null;
+                        const pendingFile = isPersonalFieldEditable ? portalSelfPdfFiles[pdfKey] : null;
                         return (
                           <div key={slot.type} className="space-y-2">
                             <Label>{slot.label}</Label>
                             {doc ? (
-                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                                <p className="text-xs text-muted-foreground truncate min-w-0 flex-1">{doc.filename}</p>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="shrink-0 w-fit gap-1.5"
-                                  disabled={portalEmployeeDocDownloadingId === doc.id}
-                                  onClick={() => void handleDownloadPortalEmployeeDocument(doc)}
-                                >
-                                  <Download className="w-3.5 h-3.5" />
-                                  {portalEmployeeDocDownloadingId === doc.id ? "Descargando…" : "Descargar"}
-                                </Button>
-                              </div>
+                              <EmployeeDocumentActionBar
+                                filename={doc.filename}
+                                busy={portalEmployeeDocActionId === doc.id}
+                                canDelete={isPersonalFieldEditable}
+                                onView={() => void handleViewPortalEmployeeDocument(doc)}
+                                onDownload={() => void handleDownloadPortalEmployeeDocument(doc)}
+                                onDelete={() => void handleDeletePortalEmployeeDocument(doc, slot.label)}
+                              />
                             ) : (
                               <p className="text-sm text-muted-foreground">Sin archivo registrado.</p>
                             )}
-                            {canSelfEditPersonalInPortal ? (
-                              <div className="space-y-1">
-                                <Input
-                                  type="file"
-                                  accept=".pdf,application/pdf"
-                                  className="cursor-pointer text-xs h-auto py-2"
-                                  onChange={(e) => {
-                                    const f = e.target.files?.[0] ?? null;
-                                    e.target.value = "";
-                                    setPortalSelfPdfFiles((prev) => ({ ...prev, [pdfKey]: f }));
-                                  }}
-                                />
-                                {pendingFile ? (
-                                  <p className="text-xs text-muted-foreground truncate">Se subirá al guardar: {pendingFile.name}</p>
-                                ) : null}
-                              </div>
+                            {isPersonalFieldEditable ? (
+                              <PendingPdfFileInput
+                                pendingFile={pendingFile}
+                                onFileSelect={handlePortalSelfPdfFileSelect(pdfKey, slot.label)}
+                                inputClassName="text-xs h-auto py-2"
+                              />
                             ) : null}
                           </div>
                         );
@@ -1567,49 +1976,89 @@ export default function EmployeePortalPage() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-phone">Teléfono</Label>
-                      <Input
-                        id="portal-phone"
-                        type="tel"
-                        autoComplete="tel"
-                        placeholder="Ej: 987654321"
-                        value={contactPhone}
-                        onChange={e => setContactPhone(e.target.value)}
-                        maxLength={50}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-phone"
+                          type="tel"
+                          autoComplete="tel"
+                          placeholder="Ej: 987654321"
+                          value={contactPhone}
+                          onChange={e => setContactPhone(e.target.value)}
+                          maxLength={50}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-phone"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactPhone)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-address">Dirección</Label>
-                      <Input
-                        id="portal-address"
-                        autoComplete="street-address"
-                        placeholder="Ej: Av. Principal 123, Lima"
-                        value={contactAddress}
-                        onChange={e => setContactAddress(e.target.value)}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-address"
+                          autoComplete="street-address"
+                          placeholder="Ej: Av. Principal 123, Lima"
+                          value={contactAddress}
+                          onChange={e => setContactAddress(e.target.value)}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-address"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactAddress)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="portal-personal-email">Correo Personal</Label>
-                      <Input
-                        id="portal-personal-email"
-                        type="email"
-                        autoComplete="email"
-                        placeholder="Ej: correo.personal@gmail.com"
-                        value={contactPersonalEmail}
-                        onChange={e => setContactPersonalEmail(e.target.value)}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-personal-email"
+                          type="email"
+                          autoComplete="email"
+                          placeholder="Ej: correo.personal@gmail.com"
+                          value={contactPersonalEmail}
+                          onChange={e => setContactPersonalEmail(e.target.value)}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-personal-email"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactPersonalEmail)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-emergency-phone">Teléfono de emergencia</Label>
-                      <Input
-                        id="portal-emergency-phone"
-                        type="tel"
-                        placeholder="Ej: 912345678"
-                        value={contactEmergencyPhone}
-                        onChange={e => setContactEmergencyPhone(e.target.value)}
-                        maxLength={50}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-emergency-phone"
+                          type="tel"
+                          placeholder="Ej: 912345678"
+                          value={contactEmergencyPhone}
+                          onChange={e => setContactEmergencyPhone(e.target.value)}
+                          maxLength={50}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-emergency-phone"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(contactEmergencyPhone)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -1619,48 +2068,182 @@ export default function EmployeePortalPage() {
                 <CardHeader>
                   <CardTitle className="text-lg">Datos Bancarios y Previsionales</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="space-y-2">
                       <Label>Banco</Label>
-                      <Select value={bank} onValueChange={setBank}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Seleccionar banco" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {portalCatalogExtra(bank, portalBankCatalog)}
-                          {portalBankCatalog.map(b => (
-                            <SelectItem key={b} value={b}>
-                              {b}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {isDatosFieldEditable ? (
+                        <Select value={bank} onValueChange={setBank}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleccionar banco" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {portalCatalogExtra(bank, portalBankCatalog)}
+                            {portalBankCatalog.map(b => (
+                              <SelectItem key={b} value={b}>
+                                {b}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(bank)} placeholder="—" />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="portal-bank-account">Número de cuenta</Label>
-                      <Input
-                        id="portal-bank-account"
-                        placeholder="Ej: 19112345678901"
-                        value={bankAccount}
-                        onChange={e => setBankAccount(e.target.value)}
-                      />
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-bank-account"
+                          placeholder="Ej: 19112345678901"
+                          value={bankAccount}
+                          onChange={e => setBankAccount(e.target.value)}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-bank-account"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(bankAccount)}
+                          placeholder="—"
+                        />
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="portal-bank-account-cci">Número de cuenta interbancaria (CCI)</Label>
+                      {isDatosFieldEditable ? (
+                        <Input
+                          id="portal-bank-account-cci"
+                          placeholder="Ej: 00219112345678901234"
+                          inputMode="numeric"
+                          maxLength={20}
+                          value={bankAccountCci}
+                          onChange={e => setBankAccountCci(e.target.value.replace(/\D/g, "").slice(0, 20))}
+                        />
+                      ) : (
+                        <Input
+                          id="portal-bank-account-cci"
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(bankAccountCci)}
+                          placeholder="—"
+                        />
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label>Sistema previsional</Label>
-                      <Select value={pensionFund} onValueChange={setPensionFund}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Seleccionar" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {portalCatalogExtra(pensionFund, portalPensionCatalog)}
-                          {portalPensionCatalog.map(p => (
-                            <SelectItem key={p} value={p}>
-                              {p}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      {isDatosFieldEditable ? (
+                        <Select value={pensionFund} onValueChange={setPensionFund}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleccionar" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {portalCatalogExtra(pensionFund, portalPensionCatalog)}
+                            {portalPensionCatalog.map(p => (
+                              <SelectItem key={p} value={p}>
+                                {p}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(pensionFund)} placeholder="—" />
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Aporte aplicable en boleta</Label>
+                      {isDatosFieldEditable ? (
+                        <Select value={employerContributionOption} onValueChange={setEmployerContributionOption}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleccionar" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {portalEmployerContributionOptionCatalog.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={
+                            portalEmployerContributionOptionCatalog.find((option) => option.value === employerContributionOption)
+                              ?.label ?? "Ninguna"
+                          }
+                          placeholder="—"
+                        />
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>CUSPP</Label>
+                      {isPersonalFieldEditable ? (
+                        <Input
+                          placeholder="Ej: 123456ABCDEF"
+                          value={portalSelfCuspp}
+                          onChange={(e) => setPortalSelfCuspp(e.target.value.toUpperCase())}
+                        />
+                      ) : (
+                        <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalSelfCuspp)} placeholder="—" />
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Número de dependientes</Label>
+                      {isPersonalFieldEditable ? (
+                        <Input
+                          type="number"
+                          min={0}
+                          max={20}
+                          value={portalSelfDependentsCount}
+                          onChange={(e) => {
+                            const cleaned = e.target.value.replace(/\D/g, "").slice(0, 2);
+                            if (cleaned === "") {
+                              setPortalSelfDependentsCount("");
+                              return;
+                            }
+                            const numeric = Number.parseInt(cleaned, 10);
+                            if (Number.isNaN(numeric)) {
+                              setPortalSelfDependentsCount("");
+                              return;
+                            }
+                            setPortalSelfDependentsCount(String(Math.min(20, numeric)));
+                          }}
+                        />
+                      ) : (
+                        <Input
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(
+                            portalSelfDependentsCount.trim() !== "" ? portalSelfDependentsCount : null,
+                          )}
+                          placeholder="—"
+                        />
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Asignación familiar</Label>
+                      {isPersonalFieldEditable ? (
+                        <Select
+                          value={portalSelfHasFamilyAllowance ? "yes" : "no"}
+                          onValueChange={(value) => setPortalSelfHasFamilyAllowance(value === "yes")}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Seleccionar" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="yes">Sí</SelectItem>
+                            <SelectItem value="no">No</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalSelfHasFamilyAllowance ? "Sí" : "No"}
+                        />
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -1683,7 +2266,11 @@ export default function EmployeePortalPage() {
                       </div>
                       <div className="space-y-2">
                         <Label>Modalidad</Label>
-                        <Input readOnly className={cn(portalReadonlyFieldClass)} value={portalFieldDisplay(portalWork.modality)} />
+                        <Input
+                          readOnly
+                          className={cn(portalReadonlyFieldClass)}
+                          value={portalFieldDisplay(formatEmployeeModalityDisplay(portalWork.modality))}
+                        />
                       </div>
                       <div className="space-y-2">
                         <Label>Tipo de contrato</Label>
@@ -1720,35 +2307,30 @@ export default function EmployeePortalPage() {
                           placeholder="—"
                         />
                       </div>
-                    </div>
-                    <div className="space-y-2 pt-2">
-                      <Label>Contrato (PDF)</Label>
-                      {portalContractDoc ? (
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 max-w-md">
-                          <p className="text-xs text-muted-foreground truncate min-w-0 flex-1">{portalContractDoc.filename}</p>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="shrink-0 w-fit gap-1.5"
-                            disabled={portalEmployeeDocDownloadingId === portalContractDoc.id}
-                            onClick={() => void handleDownloadPortalEmployeeDocument(portalContractDoc)}
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            {portalEmployeeDocDownloadingId === portalContractDoc.id ? "Descargando…" : "Descargar"}
-                          </Button>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">Sin archivo registrado.</p>
-                      )}
+                      <div className="space-y-2">
+                        <Label>Contrato (PDF)</Label>
+                        {portalContractDoc ? (
+                          <EmployeeDocumentActionBar
+                            filename={portalContractDoc.filename}
+                            busy={portalEmployeeDocActionId === portalContractDoc.id}
+                            canDelete={false}
+                            onView={() => void handleViewPortalEmployeeDocument(portalContractDoc)}
+                            onDownload={() => void handleDownloadPortalEmployeeDocument(portalContractDoc)}
+                          />
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Sin archivo registrado.</p>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
               ) : null}
 
-              <Button type="button" onClick={() => void handleSaveContact()} disabled={contactSaving}>
-                {contactSaving ? "Guardando…" : "Guardar cambios"}
-              </Button>
+              {isDatosEditing ? (
+                <Button type="button" onClick={() => void handleSaveContact()} disabled={contactSaving}>
+                  {contactSaving ? "Guardando…" : "Guardar cambios"}
+                </Button>
+              ) : null}
             </>
           )}
         </TabsContent>
@@ -1812,12 +2394,13 @@ export default function EmployeePortalPage() {
                     Resumen según registros del sistema para el mes seleccionado (no incluye horas extra ni conceptos no
                     modelados en asistencia).
                   </p>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
                     {(
                       [
                         ["Días asistidos", String(attendanceStats.asistidos)],
                         ["Faltas", String(attendanceStats.faltas)],
                         ["Tardanzas", String(attendanceStats.tardanzas)],
+                        ["Vacaciones", String(attendanceStats.vacaciones)],
                         ["Otros registros", String(attendanceStats.otros)],
                       ] as const
                     ).map(([l, v]) => (
@@ -2533,6 +3116,7 @@ export default function EmployeePortalPage() {
           setPortalAttDayOpen(open);
           if (!open) {
             setPortalAttDayRecord(null);
+            setPortalAttDayStatus(null);
             setPortalAttDayIso(null);
             setPortalJustificationDraft("");
             setPortalJustificationFile(null);
@@ -2548,9 +3132,15 @@ export default function EmployeePortalPage() {
           </DialogHeader>
           <div className="space-y-4 text-sm">
             {!portalAttDayRecord ? (
-              <p className="text-muted-foreground leading-relaxed">
-                No hay registro de asistencia para este día laborable.
-              </p>
+              portalAttDayStatus === "vacaciones" ? (
+                <p className="text-muted-foreground leading-relaxed">
+                  Día de vacaciones aprobado. No requiere registro de asistencia adicional.
+                </p>
+              ) : (
+                <p className="text-muted-foreground leading-relaxed">
+                  No hay registro de asistencia para este día laborable.
+                </p>
+              )
             ) : (
               <>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">

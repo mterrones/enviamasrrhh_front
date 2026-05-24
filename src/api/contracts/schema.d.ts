@@ -541,6 +541,77 @@ export interface paths {
         };
         trace?: never;
     };
+    "/company-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get company profile used in payslip header
+         * @description Requires payroll.view or settings.params.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CompanyProfileEnvelope"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update company profile
+         * @description Requires settings.params.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CompanyProfileWrite"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CompanyProfileEnvelope"];
+                    };
+                };
+                401: components["responses"]["Unauthorized"];
+                403: components["responses"]["Forbidden"];
+                422: components["responses"]["ValidationError"];
+            };
+        };
+        trace?: never;
+    };
     "/roles": {
         parameters: {
             query?: never;
@@ -1902,7 +1973,11 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["PayslipApproveWrite"];
+                };
+            };
             responses: {
                 /** @description OK */
                 200: {
@@ -2574,123 +2649,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/settings/mail": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get persisted SMTP settings
-         * @description Requires settings.smtp. Password is never returned; use password_set.
-         */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["MailSettingsEnvelope"];
-                    };
-                };
-                401: components["responses"]["Unauthorized"];
-                403: components["responses"]["Forbidden"];
-            };
-        };
-        /**
-         * Update SMTP settings
-         * @description Requires settings.smtp. Omit password to leave unchanged; send empty string to clear.
-         */
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["MailSettingsWrite"];
-                };
-            };
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["MailSettingsEnvelope"];
-                    };
-                };
-                401: components["responses"]["Unauthorized"];
-                403: components["responses"]["Forbidden"];
-                422: components["responses"]["ValidationError"];
-            };
-        };
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/settings/mail/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Send test email
-         * @description Requires settings.smtp. Uses persisted SMTP when enabled and host is set; otherwise default mailer (e.g. MAIL_* / log).
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["MailTestRequest"];
-                };
-            };
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["MailTestEnvelope"];
-                    };
-                };
-                401: components["responses"]["Unauthorized"];
-                403: components["responses"]["Forbidden"];
-                422: components["responses"]["ValidationError"];
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2736,6 +2694,8 @@ export interface components {
             role?: components["schemas"]["AppRole"];
             /** @description Effective RBAC permission slugs for the current user */
             permissions?: string[];
+            /** @description Target user permissions without impersonation actor merge */
+            target_permissions?: string[];
             avatar_path?: string | null;
             department_id?: number | null;
             department?: components["schemas"]["Department"] | null;
@@ -2744,12 +2704,14 @@ export interface components {
                 first_name: string;
                 last_name: string;
             };
-            impersonation?: {
-                active: boolean;
+            impersonation?: null | {
+                /** @enum {boolean} */
+                active: true;
                 actor_id: number;
                 actor_name: string;
                 actor_email: string;
-            } | null;
+                actor_role?: components["schemas"]["AppRole"];
+            };
         };
         UserMeEnvelope: {
             data: components["schemas"]["UserMe"];
@@ -2785,8 +2747,13 @@ export interface components {
             department_id?: number | null;
             manager_id?: number | null;
             first_name: string;
+            middle_name?: string | null;
             last_name: string;
-            dni: string;
+            second_last_name?: string | null;
+            /** @enum {string|null} */
+            document_type?: "dni" | "ce" | "passport" | null;
+            dni?: string | null;
+            employee_code?: string | null;
             /** Format: date */
             birth_date?: string | null;
             education_level?: string | null;
@@ -2803,8 +2770,15 @@ export interface components {
             emergency_contact_phone?: string | null;
             bank?: string | null;
             bank_account?: string | null;
+            bank_account_cci?: string | null;
             pension_fund?: string | null;
+            /** @enum {string|null} */
+            employer_contribution_option?: "essalud" | "sis_microempresa" | null;
+            cuspp?: string | null;
+            dependents_count?: number | null;
+            has_family_allowance?: boolean;
             position?: string | null;
+            work_center?: string | null;
             modality?: string | null;
             schedule?: string | null;
             salary?: string | null;
@@ -2815,6 +2789,7 @@ export interface components {
             contract_end?: string | null;
             status: components["schemas"]["EmployeeStatus"];
             photo_path?: string | null;
+            signature_image_path?: string | null;
             /** Format: date-time */
             created_at?: string | null;
             /** Format: date-time */
@@ -2825,8 +2800,13 @@ export interface components {
             department_id?: number | null;
             manager_id?: number | null;
             first_name: string;
+            middle_name?: string | null;
             last_name: string;
-            dni: string;
+            second_last_name?: string | null;
+            /** @enum {string|null} */
+            document_type?: "dni" | "ce" | "passport" | null;
+            dni?: string | null;
+            employee_code?: string | null;
             /** Format: date */
             birth_date?: string | null;
             education_level?: string | null;
@@ -2839,8 +2819,15 @@ export interface components {
             emergency_contact_phone?: string | null;
             bank?: string | null;
             bank_account?: string | null;
+            bank_account_cci?: string | null;
             pension_fund?: string | null;
+            /** @enum {string|null} */
+            employer_contribution_option?: "essalud" | "sis_microempresa" | null;
+            cuspp?: string | null;
+            dependents_count?: number | null;
+            has_family_allowance?: boolean | null;
             position?: string | null;
+            work_center?: string | null;
             modality?: string | null;
             schedule?: string | null;
             salary?: number | null;
@@ -2851,10 +2838,37 @@ export interface components {
             contract_end?: string | null;
             status?: components["schemas"]["EmployeeStatus"];
             photo_path?: string | null;
+            signature_image_path?: string | null;
         };
         /** @description Same fields as EmployeeWrite but all optional for PATCH */
         EmployeeWritePartial: {
             [key: string]: unknown;
+        };
+        CompanyProfile: {
+            id: number;
+            legal_name?: string | null;
+            ruc?: string | null;
+            fiscal_address?: string | null;
+            labor_center?: string | null;
+            logo_path?: string | null;
+            employer_signer_name?: string | null;
+            employer_signature_path?: string | null;
+            /** Format: date-time */
+            created_at?: string | null;
+            /** Format: date-time */
+            updated_at?: string | null;
+        };
+        CompanyProfileWrite: {
+            legal_name?: string | null;
+            ruc?: string | null;
+            fiscal_address?: string | null;
+            labor_center?: string | null;
+            logo_path?: string | null;
+            employer_signer_name?: string | null;
+            employer_signature_path?: string | null;
+        };
+        CompanyProfileEnvelope: {
+            data: components["schemas"]["CompanyProfile"];
         };
         EmployeeEnvelope: {
             data: components["schemas"]["Employee"];
@@ -2976,7 +2990,7 @@ export interface components {
             links: components["schemas"]["PaginationLinks"];
         };
         /** @enum {string} */
-        EmployeeDocumentType: "antecedentes" | "cv" | "medical_exam" | "contract" | "termination_certificate";
+        EmployeeDocumentType: "dni_scan" | "antecedentes" | "cv" | "medical_exam" | "contract" | "termination_certificate";
         EmployeeDocument: {
             id: number;
             employee_id: number;
@@ -3167,8 +3181,13 @@ export interface components {
             employee_id: number;
             gross_amount: string;
             deductions_amount: string;
+            extraordinary_bonus_amount?: string;
             net_amount: string;
             status: string;
+            /** Format: date-time */
+            approved_at?: string | null;
+            /** Format: date */
+            issued_at?: string | null;
             /** @description May include payslip_breakdown (see PayslipBreakdown) and custom keys. legal_parameters_context is populated on create by the server. */
             meta?: {
                 [key: string]: unknown;
@@ -3189,7 +3208,10 @@ export interface components {
         PayslipAmountsPatch: {
             gross_amount: number;
             deductions_amount?: number;
+            extraordinary_bonus_amount?: number;
             net_amount: number;
+            /** Format: date */
+            issued_at?: string | null;
             /** @description Merge AFP/ONP line into meta.payslip_breakdown. */
             apply_previsional_assist?: boolean;
             /** @description Optional; cannot set legal_parameters_context (server preserves existing). */
@@ -3274,6 +3296,8 @@ export interface components {
             /** @enum {string|null} */
             category?: "damage_equipment" | "salary_advance" | "loan" | "other" | null;
             description?: string | null;
+            total_amount?: number;
+            installment_count?: number;
             notes?: string | null;
             asset_id?: number | null;
             /** @enum {string} */
@@ -3290,8 +3314,11 @@ export interface components {
             employee_id: number;
             gross_amount: number;
             deductions_amount?: number;
+            extraordinary_bonus_amount?: number;
             net_amount: number;
             status?: string;
+            /** Format: date */
+            issued_at?: string | null;
             /**
              * @description When true, server merges a previsional deduction line into meta.payslip_breakdown from legal parameters (same logic as preview-previsional). Returns 422 if regime unsupported or rate missing. If deduction lines exist after merge, deductions_amount and net_amount are aligned with the sum of lines.
              * @default false
@@ -3301,6 +3328,11 @@ export interface components {
             meta?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** @description Optional issue date for approval. If omitted, server uses payslip.issued_at and rejects approval when both are null. */
+        PayslipApproveWrite: {
+            /** Format: date */
+            issued_at?: string | null;
         };
         PayslipEnvelope: {
             data: components["schemas"]["Payslip"];
@@ -3367,44 +3399,6 @@ export interface components {
             data: components["schemas"]["Asset"][];
             meta: components["schemas"]["PaginationMeta"];
             links: components["schemas"]["PaginationLinks"];
-        };
-        MailSettings: {
-            enabled: boolean;
-            host?: string | null;
-            port?: number | null;
-            /** @enum {string|null} */
-            encryption?: "tls" | "ssl" | null;
-            username?: string | null;
-            password_set: boolean;
-            /** Format: email */
-            from_address?: string | null;
-            from_name?: string | null;
-        };
-        MailSettingsEnvelope: {
-            data: components["schemas"]["MailSettings"];
-        };
-        MailSettingsWrite: {
-            enabled: boolean;
-            host?: string | null;
-            port?: number | null;
-            /** @enum {string|null} */
-            encryption?: "tls" | "ssl" | "" | null;
-            username?: string | null;
-            password?: string | null;
-            /** Format: email */
-            from_address?: string | null;
-            from_name?: string | null;
-        };
-        MailTestRequest: {
-            /** Format: email */
-            to: string;
-        };
-        MailTestEnvelope: {
-            data: {
-                sent: boolean;
-                /** Format: email */
-                to: string;
-            };
         };
         UserAdmin: {
             id: number;

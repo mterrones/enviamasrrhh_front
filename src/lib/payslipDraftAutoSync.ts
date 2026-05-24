@@ -58,12 +58,12 @@ export function reconcilePayslipDeductionDraft(input: {
   } = input;
 
   const manualLines = currentLines.filter((l) => !isAutoSyncedDeductionCode(l.code));
-  const carryAttendance =
+  const carryAttendanceAutoLines =
     attendancePreview == null ? currentLines.filter((l) => isAttendanceSuggestionDeductionCode(l.code)) : [];
 
   const afterAttendance = attendancePreview
-    ? mergeAttendancePreviewIntoDeductionLines([...manualLines, ...carryAttendance], attendancePreview).lines
-    : [...manualLines, ...carryAttendance];
+    ? mergeAttendancePreviewIntoDeductionLines([...manualLines, ...carryAttendanceAutoLines], attendancePreview).lines
+    : [...manualLines, ...carryAttendanceAutoLines];
 
   let out = afterAttendance.filter((l) => !isPrevisionalDeductionCode(l.code));
   if (previsionalLoading) {

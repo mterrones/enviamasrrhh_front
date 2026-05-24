@@ -89,7 +89,7 @@ export default function DashboardPage() {
 
   const metricCards = [
     {
-      label: "Empleados activos",
+      label: "Colaboradores activos",
       value: loading ? "…" : summary != null ? String(summary.active_employee_count) : "—",
       icon: Users,
       color: "bg-primary/10 text-primary",
@@ -207,7 +207,7 @@ export default function DashboardPage() {
             {loading ? (
               <p className="text-sm text-muted-foreground py-8 text-center">Cargando…</p>
             ) : areaChartData.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-8 text-center">Sin empleados activos para mostrar.</p>
+              <p className="text-sm text-muted-foreground py-8 text-center">Sin colaboradores activos para mostrar.</p>
             ) : (
               <>
                 <div className="h-64 flex items-center justify-center">

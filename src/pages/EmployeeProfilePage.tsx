@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Mail, Phone, MapPin, Calendar, Briefcase, Upload, Eye, Download, Trash2 } from "lucide-react";
+import { ArrowLeft, Mail, Phone, MapPin, Calendar, Briefcase } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,18 +17,20 @@ import {
 } from "@/api/employees";
 import { fetchEmployeePhotoBlob } from "@/api/employeePhotos";
 import {
-  deleteEmployeeDocument,
   fetchEmployeeDocumentBlob,
   fetchEmployeeDocuments,
-  uploadEmployeeDocument,
   type EmployeeDocument,
   type EmployeeDocumentType,
 } from "@/api/employeeDocuments";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { formatEmployeeModalityDisplay } from "@/lib/employeeModalityCatalog";
 import { formatEmployeeName } from "@/lib/employeeName";
+import { visibleEmployeeDocuments } from "@/lib/employeeDocumentUi";
 import { formatAppDate, formatAppDateTime, formatAppMonthYear } from "@/lib/formatAppDate";
+import { displayEmployeeDni } from "@/lib/employeeDniDisplay";
 import { cn } from "@/lib/utils";
+import { EmployeeDocumentActionBar } from "@/components/EmployeeDocumentActionBar";
 import { isWeekendYmd } from "@/lib/weekendAttendance";
 import { fetchAllAttendanceInRange, type AttendanceRecord } from "@/api/attendance";
 import {
@@ -113,10 +115,12 @@ function formatSalary(s?: string | null): string {
 }
 
 const documentTypeLabels: Record<EmployeeDocumentType, string> = {
+  dni_scan: "Escaneo de DNI",
   antecedentes: "Antecedentes",
   cv: "CV",
   medical_exam: "Examen médico",
   contract: "Contrato",
+  termination_certificate: "Certificado de cese",
 };
 
 function storageBasename(path: string): string {
@@ -133,19 +137,13 @@ export default function EmployeeProfilePage() {
   const canHrEditEmployee = hasPermission("employees.edit");
   const canSelfServiceProfile = hasPermission("employees.self_edit") && isOwnProfile;
   const canEditProfile = canHrEditEmployee || canSelfServiceProfile;
-  const canUploadContractDocument = canHrEditEmployee;
-  const canManageDocuments = canHrEditEmployee || canSelfServiceProfile;
   const canViewEmployeeDirectory = hasPermission("employees.view");
-  const profileListHref = canViewEmployeeDirectory ? "/empleados" : user?.employee?.id != null ? `/empleados/${user.employee.id}` : "/portal";
-  const profileListLabel = canViewEmployeeDirectory ? "Volver a empleados" : "Volver";
+  const profileListHref = canViewEmployeeDirectory ? "/colaboradores" : user?.employee?.id != null ? `/colaboradores/${user.employee.id}` : "/portal";
+  const profileListLabel = canViewEmployeeDirectory ? "Volver a colaboradores" : "Volver";
   const canViewAttendance = hasPermission("attendance.view");
   const canViewPayroll = hasPermission("payroll.view");
   const canViewAssets = hasPermission("assets.view");
   const canManageAssets = hasPermission("assets.manage");
-  const antecedentesInputRef = useRef<HTMLInputElement>(null);
-  const cvInputRef = useRef<HTMLInputElement>(null);
-  const medicalInputRef = useRef<HTMLInputElement>(null);
-  const contractInputRef = useRef<HTMLInputElement>(null);
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [deptName, setDeptName] = useState("—");
   const [managerName, setManagerName] = useState("—");
@@ -154,7 +152,6 @@ export default function EmployeeProfilePage() {
   const [documents, setDocuments] = useState<EmployeeDocument[]>([]);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
-  const [uploadingType, setUploadingType] = useState<EmployeeDocumentType | null>(null);
   const [documentActionId, setDocumentActionId] = useState<number | null>(null);
   const [photoObjectUrl, setPhotoObjectUrl] = useState<string | null>(null);
   const photoObjectUrlRef = useRef<string | null>(null);
@@ -222,6 +219,8 @@ export default function EmployeeProfilePage() {
     }
   }, [employee?.id]);
 
+  const visibleDocuments = useMemo(() => visibleEmployeeDocuments(documents), [documents]);
+
   useEffect(() => {
     if (!employee?.id) return;
     loadEmployeeDocuments();
@@ -267,31 +266,6 @@ export default function EmployeeProfilePage() {
       clearPhoto();
     };
   }, [employee?.id, employee?.photo_path]);
-
-  const handleDocumentFileChange = async (ev: React.ChangeEvent<HTMLInputElement>, type: EmployeeDocumentType) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = "";
-    if (!canManageDocuments || !file || !employee) return;
-    if (type === "contract" && !canUploadContractDocument) return;
-    setUploadingType(type);
-    try {
-      await uploadEmployeeDocument(employee.id, type, file);
-      toast({
-        title: "Documento subido",
-        description: `${documentTypeLabels[type]} guardado correctamente.`,
-      });
-      await loadEmployeeDocuments();
-    } catch (err) {
-      const msg = err instanceof ApiHttpError ? err.apiError?.message ?? err.message : "No se pudo subir el archivo";
-      toast({
-        title: "Error al subir",
-        description: typeof msg === "string" ? msg : "Intenta de nuevo",
-        variant: "destructive",
-      });
-    } finally {
-      setUploadingType(null);
-    }
-  };
 
   const handleOpenDocument = async (d: EmployeeDocument) => {
     if (!employee) return;
@@ -339,29 +313,6 @@ export default function EmployeeProfilePage() {
     }
   };
 
-  const handleDeleteDocument = async (d: EmployeeDocument) => {
-    if (!employee || !canManageDocuments) return;
-    if (!canHrEditEmployee && d.type === "contract") return;
-    const ok = window.confirm(`¿Eliminar el documento "${documentTypeLabels[d.type]}"? Esta acción no se puede deshacer.`);
-    if (!ok) return;
-    setDocumentActionId(d.id);
-    try {
-      await deleteEmployeeDocument(employee.id, d.id);
-      toast({ title: "Documento eliminado", description: `${documentTypeLabels[d.type]} se eliminó correctamente.` });
-      await loadEmployeeDocuments();
-    } catch (err) {
-      const msg =
-        err instanceof ApiHttpError ? err.apiError?.message ?? err.message : "No se pudo eliminar el documento";
-      toast({
-        title: "Error",
-        description: typeof msg === "string" ? msg : "Intenta de nuevo",
-        variant: "destructive",
-      });
-    } finally {
-      setDocumentActionId(null);
-    }
-  };
-
   useEffect(() => {
     if (!id) return undefined;
 
@@ -373,7 +324,7 @@ export default function EmployeeProfilePage() {
       try {
         const empId = Number(id);
         if (Number.isNaN(empId)) {
-          throw new Error("ID de empleado no válido");
+          throw new Error("ID de colaborador no válido");
         }
 
         const [empRes, departments] = await Promise.all([
@@ -401,7 +352,7 @@ export default function EmployeeProfilePage() {
         if (!cancelled) {
           setEmployee(null);
           const msg =
-            err instanceof ApiHttpError ? err.apiError?.message ?? err.message : "No se pudo cargar el empleado";
+            err instanceof ApiHttpError ? err.apiError?.message ?? err.message : "No se pudo cargar el colaborador";
           setError(typeof msg === "string" ? msg : "Error");
         }
       } finally {
@@ -572,7 +523,7 @@ export default function EmployeeProfilePage() {
           <ArrowLeft className="w-4 h-4" /> {profileListLabel}
         </Link>
         <Card className="shadow-card border-destructive/50">
-          <CardContent className="p-6 text-sm text-destructive">{error ?? "Empleado no encontrado."}</CardContent>
+          <CardContent className="p-6 text-sm text-destructive">{error ?? "Colaborador no encontrado."}</CardContent>
         </Card>
       </div>
     );
@@ -616,7 +567,7 @@ export default function EmployeeProfilePage() {
                   {stLabel}
                 </Badge>
                 {canEditProfile ? (
-                  <Link to={`/empleados/${e.id}/edit`} className="sm:ml-auto">
+                  <Link to={`/colaboradores/${e.id}/edit`} className="sm:ml-auto">
                     <Button variant="outline" size="sm" type="button">
                       Editar datos
                     </Button>
@@ -675,7 +626,7 @@ export default function EmployeeProfilePage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 {[
-                  ["DNI", e.dni],
+                  ["DNI", displayEmployeeDni(e.dni)],
                   ["Fecha de Nacimiento", formatAppDate(e.birth_date)],
                   ["Nivel de Estudios", e.education_level ?? "—"],
                   ["Carrera", e.degree ?? "—"],
@@ -688,90 +639,6 @@ export default function EmployeeProfilePage() {
                 <Separator />
                 <div className="space-y-2">
                   <p className="text-sm font-medium">Documentos</p>
-                  <input
-                    ref={antecedentesInputRef}
-                    type="file"
-                    accept=".pdf,application/pdf"
-                    className="hidden"
-                    onChange={(ev) => void handleDocumentFileChange(ev, "antecedentes")}
-                  />
-                  <input
-                    ref={cvInputRef}
-                    type="file"
-                    accept=".pdf,application/pdf"
-                    className="hidden"
-                    onChange={(ev) => void handleDocumentFileChange(ev, "cv")}
-                  />
-                  <input
-                    ref={medicalInputRef}
-                    type="file"
-                    accept=".pdf,application/pdf"
-                    className="hidden"
-                    onChange={(ev) => void handleDocumentFileChange(ev, "medical_exam")}
-                  />
-                  <input
-                    ref={contractInputRef}
-                    type="file"
-                    accept=".pdf,application/pdf"
-                    className="hidden"
-                    onChange={(ev) => void handleDocumentFileChange(ev, "contract")}
-                  />
-                  {!canManageDocuments ? (
-                    <p className="text-xs text-muted-foreground">
-                      No tienes permiso para subir documentos. Solo lectura.
-                    </p>
-                  ) : null}
-                  {canManageDocuments && !canUploadContractDocument ? (
-                    <p className="text-xs text-muted-foreground">
-                      El contrato en PDF lo gestiona RRHH. Puedes actualizar antecedentes, CV y examen médico.
-                    </p>
-                  ) : null}
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      type="button"
-                      disabled={!canManageDocuments || uploadingType !== null}
-                      onClick={() => antecedentesInputRef.current?.click()}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      {uploadingType === "antecedentes" ? "Subiendo…" : "Antecedentes (PDF)"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      type="button"
-                      disabled={!canManageDocuments || uploadingType !== null}
-                      onClick={() => cvInputRef.current?.click()}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      {uploadingType === "cv" ? "Subiendo…" : "CV (PDF)"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      type="button"
-                      disabled={!canManageDocuments || uploadingType !== null}
-                      onClick={() => medicalInputRef.current?.click()}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      {uploadingType === "medical_exam" ? "Subiendo…" : "Examen Médico (PDF)"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="gap-1.5 text-xs"
-                      type="button"
-                      disabled={!canManageDocuments || !canUploadContractDocument || uploadingType !== null}
-                      onClick={() => contractInputRef.current?.click()}
-                    >
-                      <Upload className="w-3.5 h-3.5" />
-                      {uploadingType === "contract" ? "Subiendo…" : "Contrato (PDF)"}
-                    </Button>
-                  </div>
                   {documentsLoading ? (
                     <p className="text-xs text-muted-foreground">Cargando documentos…</p>
                   ) : documentsError ? (
@@ -781,11 +648,11 @@ export default function EmployeeProfilePage() {
                         Reintentar
                       </Button>
                     </div>
-                  ) : documents.length === 0 ? (
+                  ) : visibleDocuments.length === 0 ? (
                     <p className="text-xs text-muted-foreground">No hay documentos registrados todavía.</p>
                   ) : (
                     <ul className="space-y-3 border border-border rounded-md p-3 bg-muted/30">
-                      {documents.map((d) => {
+                      {visibleDocuments.map((d) => {
                         const busy = documentActionId === d.id;
                         return (
                           <li
@@ -798,53 +665,29 @@ export default function EmployeeProfilePage() {
                                 {formatAppDateTime(d.uploaded_at ?? d.created_at)} — {storageBasename(d.file_path)}
                               </span>
                             </div>
-                            <div className="flex flex-wrap gap-1 shrink-0">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 text-xs gap-1 px-2"
-                                type="button"
-                                disabled={busy || uploadingType !== null}
-                                onClick={() => void handleOpenDocument(d)}
-                              >
-                                <Eye className="w-3.5 h-3.5" />
-                                Ver
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 text-xs gap-1 px-2"
-                                type="button"
-                                disabled={busy || uploadingType !== null}
-                                onClick={() => void handleDownloadDocument(d)}
-                              >
-                                <Download className="w-3.5 h-3.5" />
-                                Descargar
-                              </Button>
-                              {(canHrEditEmployee || (canSelfServiceProfile && d.type !== "contract")) ? (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-xs gap-1 px-2 text-destructive hover:text-destructive"
-                                  type="button"
-                                  disabled={busy || uploadingType !== null}
-                                  onClick={() => void handleDeleteDocument(d)}
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                  Eliminar
-                                </Button>
-                              ) : null}
-                            </div>
+                            <EmployeeDocumentActionBar
+                              filename={storageBasename(d.file_path)}
+                              busy={busy}
+                              canDelete={false}
+                              onView={() => void handleOpenDocument(d)}
+                              onDownload={() => void handleDownloadDocument(d)}
+                            />
                           </li>
                         );
                       })}
                     </ul>
                   )}
-                  <p className="text-xs text-muted-foreground">
-                    PDF u otros formatos aceptados por el servidor; máx. 10&nbsp;MB por archivo. La descarga y la vista
-                    requieren permiso de lectura del empleado; eliminar documentos propios requiere el permiso de edición
-                    de RRHH o, en tu ficha, permisos de autoedición (excepto contrato).
-                  </p>
+                  {canEditProfile ? (
+                    <p className="text-xs text-muted-foreground">
+                      Para subir o reemplazar documentos, usa{" "}
+                      <span className="font-medium text-foreground">Editar datos</span>. Aquí solo puedes ver y descargar
+                      los archivos registrados.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Solo lectura: puedes ver y descargar los documentos registrados.
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -870,6 +713,7 @@ export default function EmployeeProfilePage() {
                 {[
                   ["Banco", e.bank ?? "—"],
                   ["Cuenta", e.bank_account ?? "—"],
+                  ["Número de cuenta interbancaria (CCI)", e.bank_account_cci ?? "—"],
                   ["Sistema Previsional", e.pension_fund ?? "—"],
                 ].map(([l, v]) => (
                   <div key={l} className="flex justify-between text-sm">
@@ -905,7 +749,7 @@ export default function EmployeeProfilePage() {
                 {[
                   ["Puesto", e.position ?? "—"],
                   ["Área", deptName],
-                  ["Modalidad", e.modality ?? "—"],
+                  ["Modalidad", formatEmployeeModalityDisplay(e.modality) || "—"],
                   ["Horario", e.schedule ?? "—"],
                   ["Sueldo Actual", formatSalary(e.salary)],
                   ["Tipo de Contrato", e.contract_type ?? "—"],
@@ -1050,7 +894,7 @@ export default function EmployeeProfilePage() {
               ) : payslipsError ? (
                 <p className="text-sm text-destructive px-5 py-6">{payslipsError}</p>
               ) : payslipsRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground px-5 py-6">No hay boletas registradas para este empleado.</p>
+                <p className="text-sm text-muted-foreground px-5 py-6">No hay boletas registradas para este colaborador.</p>
               ) : (
               <table className="w-full">
                   <thead>
@@ -1106,7 +950,7 @@ export default function EmployeeProfilePage() {
               ) : assetsError ? (
                 <p className="text-sm text-destructive px-5 py-6">{assetsError}</p>
               ) : assetRows.length === 0 ? (
-                <p className="text-sm text-muted-foreground px-5 py-6">No hay activos asignados a este empleado.</p>
+                <p className="text-sm text-muted-foreground px-5 py-6">No hay activos asignados a este colaborador.</p>
               ) : (
               <table className="w-full">
                   <thead>
@@ -1148,7 +992,7 @@ export default function EmployeeProfilePage() {
               {!canViewEmployeeDirectory ? (
                 <p className="text-sm text-muted-foreground">
                   El detalle administrativo de desvinculación solo está disponible para quienes gestionan el directorio de
-                  empleados. Si tienes dudas sobre un posible cese, contacta a Recursos Humanos.
+                  colaboradores. Si tienes dudas sobre un posible cese, contacta a Recursos Humanos.
                 </p>
               ) : terminationLoading ? (
                 <p className="text-sm text-muted-foreground">Cargando información de cese…</p>
@@ -1190,7 +1034,7 @@ export default function EmployeeProfilePage() {
               </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  No hay registro de cese en el sistema para este empleado. Si se registra un proceso de cese, aquí se mostrará el
+                  No hay registro de cese en el sistema para este colaborador. Si se registra un proceso de cese, aquí se mostrará el
                   estado y las fechas principales (solo consulta).
                 </p>
               )}

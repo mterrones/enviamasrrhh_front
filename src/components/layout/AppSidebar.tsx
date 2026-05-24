@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/contexts/AuthContext";
+import { AppLogoMark } from "@/components/layout/AppLogoMark";
 
 type NavLinkItem = {
   label: string;
@@ -30,13 +31,13 @@ type NavLinkItem = {
 
 const navItemsBeforePortal: NavLinkItem[] = [
   { label: "Inicio", icon: LayoutDashboard, path: "/", permission: "dashboard.view" },
-  { label: "Empleados", icon: Users, path: "/empleados", permission: "employees.view" },
+  { label: "Colaboradores", icon: Users, path: "/colaboradores", permission: "employees.view" },
   { label: "Asistencia", icon: CalendarCheck, path: "/asistencia", permission: "attendance.view" },
   { label: "Boletas y Nómina", icon: FileText, path: "/boletas", permission: "payroll.view" },
 ];
 
 const portalSingleItem: NavLinkItem = {
-  label: "Portal del Empleado",
+  label: "Portal del Colaborador",
   icon: UserCircle,
   path: "/portal",
   permission: "portal.view",
@@ -71,17 +72,12 @@ interface Props {
 
 export function AppSidebar({ collapsed, onToggle }: Props) {
   const location = useLocation();
-  const { hasPermission, user } = useAuth();
+  const { hasTargetPermission, user } = useAuth();
 
-  const isImpersonating = Boolean(user?.impersonation?.active);
-  const beforePortal = isImpersonating
-    ? []
-    : navItemsBeforePortal.filter((item) => hasPermission(item.permission));
-  const afterPortal = isImpersonating
-    ? []
-    : navItemsAfterPortal.filter((item) => hasPermission(item.permission));
-  const showPortal = hasPermission("portal.view");
-  const portalAsEmployeeModules = user?.rol === "empleado" || isImpersonating;
+  const beforePortal = navItemsBeforePortal.filter((item) => hasTargetPermission(item.permission));
+  const afterPortal = navItemsAfterPortal.filter((item) => hasTargetPermission(item.permission));
+  const showPortal = hasTargetPermission("portal.view");
+  const portalAsEmployeeModules = user?.rol === "empleado";
 
   return (
     <aside
@@ -93,9 +89,7 @@ export function AppSidebar({ collapsed, onToggle }: Props) {
       {/* Logo */}
       <div className="h-16 flex items-center px-4 border-b border-sidebar-border">
         <div className="flex items-center gap-3 overflow-hidden">
-          <div className="w-9 h-9 rounded-lg gradient-primary flex items-center justify-center shrink-0">
-            <span className="text-primary-foreground font-bold text-sm">EM</span>
-          </div>
+          <AppLogoMark size="sm" />
           {!collapsed && (
             <div className="whitespace-nowrap">
               <p className="text-sidebar-accent-foreground font-semibold text-sm leading-tight">EnviaMas</p>

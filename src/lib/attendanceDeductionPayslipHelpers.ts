@@ -3,8 +3,8 @@ import { newDeductionLine, type DeductionLineDraft } from "@/lib/payrollDeductio
 export const ATTENDANCE_DEDUCTION_LINE_CODE_ABSENCE = "absence_suggested" as const;
 export const ATTENDANCE_DEDUCTION_LINE_CODE_LATENESS = "lateness_suggested" as const;
 
-export const ATTENDANCE_DEDUCTION_LABEL_ABSENCE = "Inasistencias no justif. (sugerido)";
-export const ATTENDANCE_DEDUCTION_LABEL_LATENESS = "Tardanzas no justif. (sugerido)";
+export const ATTENDANCE_DEDUCTION_LABEL_ABSENCE = "Inasistencias no justif.";
+export const ATTENDANCE_DEDUCTION_LABEL_LATENESS = "Tardanzas no justif.";
 
 export function isAttendanceSuggestionDeductionCode(code: string): boolean {
   return code === ATTENDANCE_DEDUCTION_LINE_CODE_ABSENCE || code === ATTENDANCE_DEDUCTION_LINE_CODE_LATENESS;
@@ -124,9 +124,9 @@ export function attendanceSuggestionMergeToast(
   switch (kind) {
     case "cleared_needs_gross":
       return {
-        title: "Sin montos sugeridos",
+        title: "Sin montos automáticos",
         description:
-          "Indicá un importe bruto mayor a cero en esta boleta para calcular montos desde asistencia. Podés cargar líneas manualmente o ajustar el bruto y volver a intentar.",
+          "Indicá un importe bruto mayor a cero en esta boleta para aplicar descuentos automáticos desde asistencia. Podés cargar líneas manualmente o ajustar el bruto y volver a intentar.",
       };
     case "cleared_no_incidents":
       return {
@@ -144,13 +144,13 @@ export function attendanceSuggestionMergeToast(
     case "applied_absence_only":
     case "applied_lateness_only":
       return {
-        title: "Sugerencia en el desglose",
-        description: `Líneas orientativas según asistencia (faltas NJ: ${preview.absence_days_unjustified}, tardanzas NJ: ${preview.tardiness_events_unjustified}). Podés editar importes aquí; se aplican al guardar la boleta.`,
+        title: "Descuentos automáticos aplicados",
+        description: `Líneas aplicadas según asistencia (faltas NJ: ${preview.absence_days_unjustified}, tardanzas NJ: ${preview.tardiness_events_unjustified}). Podés editar importes aquí y se guardan en la boleta.`,
       };
     case "applied_both_zero":
       return {
-        title: "Asistencia en el desglose",
-        description: `Faltas NJ: ${preview.absence_days_unjustified}, tardanzas NJ: ${preview.tardiness_events_unjustified}. Los importes sugeridos están en cero; las líneas se muestran igual para referencia.`,
+        title: "Descuentos automáticos en cero",
+        description: `Faltas NJ: ${preview.absence_days_unjustified}, tardanzas NJ: ${preview.tardiness_events_unjustified}. Los importes automáticos quedaron en cero; las líneas se muestran igual para trazabilidad.`,
       };
   }
 }

@@ -1,4 +1,4 @@
-export function normalizeMoneyDecimalInput(raw: string): string {
+function normalizeDecimalInput(raw: string, maxDecimals: number): string {
   if (raw === "") return "";
   const unified = raw.replace(/,/g, ".");
   const filtered = unified.replace(/[^\d.]/g, "");
@@ -18,7 +18,7 @@ export function normalizeMoneyDecimalInput(raw: string): string {
   let intPart = intRaw.replace(/^0+/, "");
   if (intPart === "") intPart = "0";
 
-  const decPart = afterDot.slice(0, 2);
+  const decPart = afterDot.slice(0, maxDecimals);
 
   if (dotIdx !== -1) {
     if (decPart.length > 0) return `${intPart}.${decPart}`;
@@ -26,4 +26,12 @@ export function normalizeMoneyDecimalInput(raw: string): string {
   }
 
   return intPart;
+}
+
+export function normalizeMoneyDecimalInput(raw: string): string {
+  return normalizeDecimalInput(raw, 2);
+}
+
+export function normalizeRatioDecimalInput(raw: string, maxDecimals = 8): string {
+  return normalizeDecimalInput(raw, maxDecimals);
 }

@@ -47,7 +47,7 @@ const estadoVariant: Record<string, "default" | "secondary" | "destructive" | "o
 
 type StatusFilterKey = "todos" | "uso" | "mant" | "dev";
 
-const TIPOS_ACTIVO = ["Laptop", "Monitor", "Headset", "Teclado", "Mouse", "Otro"] as const;
+const TIPOS_ACTIVO = ["Laptop", "Monitor", "Headset", "Teclado", "Mouse", "Celular", "Otro"] as const;
 const ESTADOS_ACTIVO = ["Disponible", "En uso", "Asignado", "En mantenimiento", "Devuelto"] as const;
 
 function statusFilterToApi(key: StatusFilterKey): string | undefined {
@@ -194,7 +194,7 @@ export default function AssetsPage() {
     const descCombined = [marca, modelo].filter(Boolean).join(" ").trim() || null;
     const empId = empleado !== "__none__" ? Number(empleado) : null;
     if (empleado !== "__none__" && Number.isNaN(empId)) {
-      toast({ title: "Error", description: "Empleado no válido.", variant: "destructive" });
+      toast({ title: "Error", description: "Colaborador no válido.", variant: "destructive" });
       return;
     }
     const st = estado || "Disponible";
@@ -321,7 +321,7 @@ export default function AssetsPage() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Buscar equipo o empleado..."
+              placeholder="Buscar equipo o colaborador..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               className="pl-9"
@@ -346,7 +346,7 @@ export default function AssetsPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-border bg-muted/50">
-                {["Tipo", "Descripción", "Empleado", "Fecha Asignación", "Estado", "Acciones"].map((h) => (
+                {["Tipo", "Descripción", "Colaborador", "Fecha Asignación", "Estado", "Acciones"].map((h) => (
                   <th key={h} className="text-left text-xs font-semibold text-muted-foreground px-5 py-3">
                     {h}
                   </th>
@@ -492,7 +492,7 @@ export default function AssetsPage() {
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Empleado asignado</Label>
+                <Label>Colaborador asignado</Label>
                 <Select value={empleado} onValueChange={setEmpleado}>
                   <SelectTrigger>
                     <SelectValue placeholder="Sin asignar" />
